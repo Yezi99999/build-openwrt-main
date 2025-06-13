@@ -13,6 +13,7 @@ class OpenWrtWizard {
     }
 
     init() {
+        console.log('初始化OpenWrt配置向导...');
         this.bindEvents();
         this.loadDeviceData();
         this.loadPluginData();
@@ -22,10 +23,28 @@ class OpenWrtWizard {
         // 步骤导航
         document.getElementById('next-btn').addEventListener('click', () => this.nextStep());
         document.getElementById('prev-btn').addEventListener('click', () => this.prevStep());
-        
-        // 源码选择
+
+
+        // 源码选择卡片点击事件
+        // document.querySelectorAll('.source-card').forEach(card => {
+        //     console.log('绑定源码卡片事件:', card.dataset.source);
+        //     card.addEventListener('click', () => this.selectSource(card));
+        // });
+        //源码选择
         document.querySelectorAll('.source-card').forEach(card => {
-            card.addEventListener('click', (e) => this.selectSource(e.target.closest('.source-card')));
+            card.addEventListener('click', (e) => {
+                debugger
+                // 如果点击的是input，不处理（让input自己切换）
+                if (e.target.tagName.toLowerCase() === 'input') return;
+                this.selectSource(card);
+            });
+            // 让内部input和卡片同步
+            const input = card.querySelector('input[type="radio"],input[type="checkbox"]');
+            if (input) {
+                input.addEventListener('change', () => {
+                    this.selectSource(card);
+                });
+            }
         });
         
         // 设备搜索
@@ -53,9 +72,18 @@ class OpenWrtWizard {
 
     selectSource(card) {
         // 移除其他选中状态
-        document.querySelectorAll('.source-card').forEach(c => c.classList.remove('selected'));
+        document.querySelectorAll('.source-card').forEach(c => {
+            c.classList.remove('selected');
+            // 同步取消input选中
+            const input = c.querySelector('input[type="radio"],input[type="checkbox"]');
+            if (input) input.checked = false;
+        });
+        
         // 选中当前卡片
         card.classList.add('selected');
+        // 同步input选中
+        const input = card.querySelector('input[type="radio"],input[type="checkbox"]');
+        if (input) input.checked = true;
         this.config.source = card.dataset.source;
         this.updateSummary();
         console.log('选择源码:', this.config.source);
