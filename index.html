@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenWrt智能编译工具</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>🛠️ OpenWrt智能编译工具</h1>
+            <p>可视化配置，一键编译，支持多平台设备</p>
+        </header>
+
+        <div class="config-wizard">
+            <!-- 步骤指示器 -->
+            <div class="steps">
+                <div class="step active" data-step="1">
+                    <span class="step-number">1</span>
+                    <span class="step-title">选择源码</span>
+                </div>
+                <div class="step" data-step="2">
+                    <span class="step-number">2</span>
+                    <span class="step-title">设备配置</span>
+                </div>
+                <div class="step" data-step="3">
+                    <span class="step-number">3</span>
+                    <span class="step-title">插件选择</span>
+                </div>
+                <div class="step" data-step="4">
+                    <span class="step-number">4</span>
+                    <span class="step-title">生成配置</span>
+                </div>
+            </div>
+
+            <!-- 配置内容区域 -->
+            <div class="config-content">
+                <!-- 步骤1: 源码选择 -->
+                <div class="step-content active" id="step-1">
+                    <h3>选择OpenWrt源码分支</h3>
+                    <div class="source-options">
+                        <div class="source-card" data-source="openwrt-main">
+                            <h4>📦 OpenWrt官方源码</h4>
+                            <p>最新主线版本，功能稳定</p>
+                            <ul>
+                                <li>✅ 官方维护，更新及时</li>
+                                <li>✅ 兼容性好，支持设备多</li>
+                                <li>✅ 适合新手使用</li>
+                            </ul>
+                        </div>
+                        <div class="source-card" data-source="lede-master">
+                            <h4>🚀 Lean's源码 (LEDE)</h4>
+                            <p>国内最受欢迎的分支</p>
+                            <ul>
+                                <li>✅ 集成大量实用插件</li>
+                                <li>✅ 中文界面友好</li>
+                                <li>✅ 适合中国网络环境</li>
+                            </ul>
+                        </div>
+                        <div class="source-card" data-source="immortalwrt-master">
+                            <h4>⚡ ImmortalWrt源码</h4>
+                            <p>基于官方源码的增强版</p>
+                            <ul>
+                                <li>✅ 保持官方兼容性</li>
+                                <li>✅ 添加实用功能</li>
+                                <li>✅ 更新活跃</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 步骤2: 设备配置 -->
+                <div class="step-content" id="step-2">
+                    <h3>选择目标设备</h3>
+                    <div class="device-selector">
+                        <div class="device-search">
+                            <input type="text" id="device-search" placeholder="搜索设备型号...">
+                        </div>
+                        <div class="device-categories">
+                            <div class="category-tabs">
+                                <button class="tab-btn active" data-category="popular">热门设备</button>
+                                <button class="tab-btn" data-category="router">路由器</button>
+                                <button class="tab-btn" data-category="x86">X86/虚拟机</button>
+                                <button class="tab-btn" data-category="arm">ARM设备</button>
+                            </div>
+                            <div class="device-grid" id="device-list">
+                                <!-- 设备列表通过JS动态加载 -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 步骤3: 插件选择 -->
+                <div class="step-content" id="step-3">
+                    <h3>选择功能插件</h3>
+                    <div class="plugin-manager">
+                        <div class="plugin-sources">
+                            <h4>📋 插件源管理</h4>
+                            <div class="source-list">
+                                <label class="source-item">
+                                    <input type="checkbox" checked data-source="official">
+                                    <span>官方插件源</span>
+                                    <small>OpenWrt官方维护的插件包</small>
+                                </label>
+                                <label class="source-item">
+                                    <input type="checkbox" checked data-source="lean">
+                                    <span>Lean插件源</span>
+                                    <small>包含SSR+、广告屏蔽等实用插件</small>
+                                </label>
+                                <label class="source-item">
+                                    <input type="checkbox" data-source="kenzo">
+                                    <span>Kenzo插件源</span>
+                                    <small>额外的第三方插件</small>
+                                </label>
+                                <div class="custom-source">
+                                    <input type="text" placeholder="自定义插件源 Git 地址">
+                                    <button type="button">添加</button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="plugin-categories">
+                            <div class="category-filters">
+                                <button class="filter-btn active" data-filter="all">全部</button>
+                                <button class="filter-btn" data-filter="network">网络工具</button>
+                                <button class="filter-btn" data-filter="system">系统管理</button>
+                                <button class="filter-btn" data-filter="multimedia">多媒体</button>
+                                <button class="filter-btn" data-filter="vpn">VPN/代理</button>
+                            </div>
+                            <div class="plugin-grid" id="plugin-list">
+                                <!-- 插件列表通过JS动态加载 -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 步骤4: 生成配置 -->
+                <div class="step-content" id="step-4">
+                    <h3>配置预览与生成</h3>
+                    <div class="config-preview">
+                        <div class="config-summary">
+                            <h4>📋 配置摘要</h4>
+                            <div class="summary-item">
+                                <label>源码分支:</label>
+                                <span id="summary-source">-</span>
+                            </div>
+                            <div class="summary-item">
+                                <label>目标设备:</label>
+                                <span id="summary-device">-</span>
+                            </div>
+                            <div class="summary-item">
+                                <label>选中插件:</label>
+                                <span id="summary-plugins">0个</span>
+                            </div>
+                        </div>
+                        
+                        <div class="config-actions">
+                            <button type="button" id="check-conflicts" class="btn btn-secondary">
+                                🔍 检查冲突
+                            </button>
+                            <button type="button" id="start-build" class="btn btn-primary">
+                                🚀 开始编译
+                            </button>
+                        </div>
+                        
+                        <div class="conflict-report" id="conflict-report" style="display:none;">
+                            <!-- 冲突检测结果 -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 导航按钮 -->
+            <div class="wizard-nav">
+                <button type="button" id="prev-btn" class="btn btn-secondary" disabled>上一步</button>
+                <button type="button" id="next-btn" class="btn btn-primary">下一步</button>
+            </div>
+        </div>
+
+        <!-- 编译监控面板 -->
+        <div class="build-monitor" id="build-monitor" style="display:none;">
+            <h3>📊 编译进度监控</h3>
+            <div class="progress-container">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill"></div>
+                </div>
+                <span class="progress-text" id="progress-text">0%</span>
+            </div>
+            <div class="build-logs">
+                <div class="logs-header">
+                    <h4>📝 编译日志</h4>
+                    <button type="button" id="toggle-logs">展开/收起</button>
+                </div>
+                <div class="logs-content" id="logs-content">
+                    <!-- 日志内容 -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/config-data.js"></script>
+    <parameter name="js/wizard.js"></script>
+    <script src="js/builder.js"></script>
+</body>
+</html>
