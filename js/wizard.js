@@ -33,7 +33,6 @@ class OpenWrtWizard {
         //源码选择
         document.querySelectorAll('.source-card').forEach(card => {
             card.addEventListener('click', (e) => {
-                debugger
                 // 如果点击的是input，不处理（让input自己切换）
                 if (e.target.tagName.toLowerCase() === 'input') return;
                 this.selectSource(card);
