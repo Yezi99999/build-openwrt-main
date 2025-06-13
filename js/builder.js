@@ -1,694 +1,623 @@
-// OpenWrt 编译控制和监控逻辑
-class OpenWrtBuilder {
-    constructor() {
-        this.buildStatus = null;
-        this.currentBuildId = null;
-        this.progressInterval = null;
-        this.logUpdateInterval = null;
-        this.isMonitoring = false;
-        this.init();
+/**
+ * OpenWrt 编译控制器 - 修复版本
+ * 移除未定义的依赖，添加必要的工具类
+ */
+
+// 工具类定义
+class Utils {
+    /**
+     * 格式化时间
+     */
+    static formatTime(timestamp) {
+        return new Date(timestamp).toLocaleString('zh-CN');
     }
 
-    init() {
-        this.bindEvents();
-        this.loadBuildHistory();
+    /**
+     * 格式化文件大小
+     */
+    static formatSize(bytes) {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     }
 
-    bindEvents() {
-        // 日志展开/收起按钮
-        const toggleLogsBtn = document.getElementById('toggle-logs');
-        if (toggleLogsBtn) {
-            toggleLogsBtn.addEventListener('click', () => this.toggleLogs());
+    /**
+     * 格式化持续时间
+     */
+    static formatDuration(ms) {
+        const seconds = Math.floor(ms / 1000);
+        const minutes = Math.floor(seconds / 60);
+        const hours = Math.floor(minutes / 60);
+
+        if (hours > 0) {
+            return `${hours}小时${minutes % 60}分钟`;
+        } else if (minutes > 0) {
+            return `${minutes}分钟${seconds % 60}秒`;
+        } else {
+            return `${seconds}秒`;
         }
+    }
 
-        // 监听页面可见性变化，优化性能
-        document.addEventListener('visibilitychange', () => {
-            if (document.hidden && this.isMonitoring) {
-                this.pauseMonitoring();
-            } else if (!document.hidden && this.buildStatus === 'in_progress') {
-                this.resumeMonitoring();
-            }
+    /**
+     * 延迟执行
+     */
+    static delay(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    /**
+     * 安全的JSON解析
+     */
+    static safeJsonParse(str, defaultValue = null) {
+        try {
+            return JSON.parse(str);
+        } catch (error) {
+            console.warn('JSON解析失败:', error);
+            return defaultValue;
+        }
+    }
+
+    /**
+     * 生成UUID
+     */
+    static generateUUID() {
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+            const r = Math.random() * 16 | 0;
+            const v = c === 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
         });
     }
 
     /**
-     * 启动编译任务
-     * @param {Object} buildConfig - 编译配置
+     * 深度克隆对象
      */
-    async startBuild(buildConfig) {
-        try {
-            console.log('启动编译任务:', buildConfig);
-            
-            // 生成唯一构建ID
-            this.currentBuildId = Utils.generateId();
-            buildConfig.build_id = this.currentBuildId;
-            
-            // 显示编译监控面板
-            this.showBuildMonitor();
-            
-            // 初始化UI状态
-            this.initializeBuildUI(buildConfig);
-            
-            // 保存构建配置到本地存储
-            this.saveBuildConfig(buildConfig);
-            
-            // 触发GitHub Actions编译
-            const result = await this.triggerGitHubBuild(buildConfig);
-            
-            if (result.success) {
-                this.buildStatus = 'queued';
-                this.addLogEntry('info', '✅ 编译任务提交成功，开始监控进度...');
-                
-                // 开始监控编译进度
-                this.startProgressMonitoring(result.run_id || null);
-            } else {
-                throw new Error(result.message || '编译启动失败');
-            }
-            
-        } catch (error) {
-            console.error('编译启动失败:', error);
-            this.addLogEntry('error', `❌ 编译启动失败: ${error.message}`);
-            this.buildStatus = 'failed';
-            throw error;
-        }
-    }
-
-    /**
-     * 显示编译监控面板
-     */
-    showBuildMonitor() {
-        const monitor = document.getElementById('build-monitor');
-        if (monitor) {
-            monitor.style.display = 'block';
-            // 平滑滚动到监控面板
-            setTimeout(() => {
-                monitor.scrollIntoView({ 
-                    behavior: 'smooth', 
-                    block: 'start' 
-                });
-            }, 100);
-        }
-    }
-
-    /**
-     * 初始化编译UI状态
-     */
-    initializeBuildUI(buildConfig) {
-        // 重置进度条
-        this.updateProgress(0, '准备编译...');
-        
-        // 清空日志
-        const logsContent = document.getElementById('logs-content');
-        if (logsContent) {
-            logsContent.innerHTML = '';
-        }
-        
-        // 添加初始日志
-        this.addLogEntry('info', `🚀 开始编译 OpenWrt 固件`);
-        this.addLogEntry('info', `📦 源码分支: ${buildConfig.source_branch}`);
-        this.addLogEntry('info', `🎯 目标设备: ${buildConfig.target_device}`);
-        this.addLogEntry('info', `🔧 插件数量: ${buildConfig.plugins.length} 个`);
-        
-        if (buildConfig.plugins.length > 0) {
-            this.addLogEntry('info', `📋 选中插件: ${buildConfig.plugins.join(', ')}`);
-        }
-    }
-
-    /**
-     * 触发GitHub Actions编译
-     */
-    async triggerGitHubBuild(buildConfig) {
-        // 检查GitHub配置
-        if (!GITHUB_REPO) {
-            console.warn('GitHub仓库未配置，使用模拟模式');
-            return {
-                success: true,
-                message: '编译已启动（模拟模式）',
-                run_id: null
-            };
-        }
-
-        try {
-            const payload = {
-                event_type: 'web_build',
-                client_payload: {
-                    source_branch: buildConfig.source_branch,
-                    target_device: buildConfig.target_device,
-                    plugins: buildConfig.plugins,
-                    custom_sources: buildConfig.custom_sources || [],
-                    build_id: buildConfig.build_id,
-                    timestamp: Date.now()
+    static deepClone(obj) {
+        if (obj === null || typeof obj !== 'object') return obj;
+        if (obj instanceof Date) return new Date(obj.getTime());
+        if (obj instanceof Array) return obj.map(item => Utils.deepClone(item));
+        if (typeof obj === 'object') {
+            const clonedObj = {};
+            for (const key in obj) {
+                if (obj.hasOwnProperty(key)) {
+                    clonedObj[key] = Utils.deepClone(obj[key]);
                 }
+            }
+            return clonedObj;
+        }
+    }
+
+    /**
+     * 防抖函数
+     */
+    static debounce(func, wait) {
+        let timeout;
+        return function executedFunction(...args) {
+            const later = () => {
+                clearTimeout(timeout);
+                func(...args);
+            };
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+        };
+    }
+
+    /**
+     * 获取URL参数
+     */
+    static getUrlParams() {
+        const params = {};
+        const urlParams = new URLSearchParams(window.location.search);
+        for (const [key, value] of urlParams.entries()) {
+            params[key] = value;
+        }
+        return params;
+    }
+}
+
+// 编译历史管理类
+class BuildHistoryManager {
+    constructor() {
+        this.storageKey = 'openwrt_build_history';
+        this.maxHistoryItems = 50;
+    }
+
+    /**
+     * 获取编译历史
+     */
+    getHistory() {
+        try {
+            const history = localStorage.getItem(this.storageKey);
+            return history ? JSON.parse(history) : [];
+        } catch (error) {
+            console.warn('获取编译历史失败:', error);
+            return [];
+        }
+    }
+
+    /**
+     * 添加编译记录
+     */
+    addRecord(record) {
+        try {
+            const history = this.getHistory();
+            const newRecord = {
+                id: Utils.generateUUID(),
+                timestamp: Date.now(),
+                ...record
             };
 
-            const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/dispatches`, {
-                method: 'POST',
-                headers: {
-                    'Accept': 'application/vnd.github.v3+json',
-                    'Content-Type': 'application/json',
-                    ...(GITHUB_TOKEN && { 'Authorization': `token ${GITHUB_TOKEN}` })
-                },
-                body: JSON.stringify(payload)
-            });
+            history.unshift(newRecord);
 
-            if (response.ok) {
-                return {
-                    success: true,
-                    message: '编译任务提交成功',
-                    run_id: null // GitHub Dispatch API不直接返回run_id
-                };
-            } else {
-                const errorData = await response.json().catch(() => ({}));
-                throw new Error(errorData.message || `HTTP ${response.status}: ${response.statusText}`);
+            // 限制历史记录数量
+            if (history.length > this.maxHistoryItems) {
+                history.splice(this.maxHistoryItems);
             }
 
+            localStorage.setItem(this.storageKey, JSON.stringify(history));
+            return newRecord;
         } catch (error) {
-            if (error.name === 'TypeError' && error.message.includes('fetch')) {
-                // 网络错误，可能是CORS或网络连接问题
-                console.warn('GitHub API调用失败，切换到模拟模式:', error);
-                return {
-                    success: true,
-                    message: '编译已启动（模拟模式）',
-                    run_id: null
-                };
+            console.error('添加编译记录失败:', error);
+        }
+    }
+
+    /**
+     * 更新编译记录
+     */
+    updateRecord(id, updates) {
+        try {
+            const history = this.getHistory();
+            const index = history.findIndex(record => record.id === id);
+
+            if (index !== -1) {
+                history[index] = { ...history[index], ...updates };
+                localStorage.setItem(this.storageKey, JSON.stringify(history));
+                return history[index];
             }
-            throw error;
+        } catch (error) {
+            console.error('更新编译记录失败:', error);
+        }
+    }
+
+    /**
+     * 删除编译记录
+     */
+    deleteRecord(id) {
+        try {
+            const history = this.getHistory();
+            const filteredHistory = history.filter(record => record.id !== id);
+            localStorage.setItem(this.storageKey, JSON.stringify(filteredHistory));
+        } catch (error) {
+            console.error('删除编译记录失败:', error);
+        }
+    }
+
+    /**
+     * 清空编译历史
+     */
+    clearHistory() {
+        try {
+            localStorage.removeItem(this.storageKey);
+        } catch (error) {
+            console.error('清空编译历史失败:', error);
+        }
+    }
+}
+
+// OpenWrt编译控制器主类
+class OpenWrtBuilder {
+    constructor() {
+        this.isMonitoring = false;
+        this.monitorInterval = null;
+        this.currentBuildId = null;
+        this.buildHistory = new BuildHistoryManager();
+
+        this.init();
+    }
+
+    /**
+     * 初始化编译控制器
+     */
+    init() {
+        try {
+            console.log('🔨 初始化OpenWrt编译控制器');
+            this.bindEvents();
+            this.loadBuildHistory();
+            console.log('✅ 编译控制器初始化完成');
+        } catch (error) {
+            console.error('❌ 编译控制器初始化失败:', error);
+        }
+    }
+
+    /**
+     * 绑定事件监听器
+     */
+    bindEvents() {
+        // 监听编译开始事件
+        document.addEventListener('buildStarted', (event) => {
+            this.onBuildStarted(event.detail);
+        });
+
+        // 监听编译完成事件
+        document.addEventListener('buildCompleted', (event) => {
+            this.onBuildCompleted(event.detail);
+        });
+
+        // 监听编译失败事件
+        document.addEventListener('buildFailed', (event) => {
+            this.onBuildFailed(event.detail);
+        });
+
+        // 监听页面卸载事件
+        window.addEventListener('beforeunload', () => {
+            this.cleanup();
+        });
+    }
+
+    /**
+     * 加载编译历史
+     */
+    loadBuildHistory() {
+        try {
+            const history = this.buildHistory.getHistory();
+            console.log(`📚 加载了 ${history.length} 条编译历史记录`);
+
+            // 如果需要显示历史记录，可以在这里渲染
+            this.renderBuildHistory(history);
+        } catch (error) {
+            console.error('加载编译历史失败:', error);
+        }
+    }
+
+    /**
+     * 渲染编译历史
+     */
+    renderBuildHistory(history) {
+        const historyContainer = document.getElementById('build-history');
+        if (!historyContainer || history.length === 0) return;
+
+        let html = '<div class="build-history-list">';
+
+        history.slice(0, 10).forEach(record => {
+            const statusClass = this.getStatusClass(record.status);
+            const timeAgo = this.getTimeAgo(record.timestamp);
+
+            html += `
+                <div class="history-item ${statusClass}">
+                    <div class="history-header">
+                        <span class="history-status">${this.getStatusIcon(record.status)}</span>
+                        <span class="history-device">${record.device || '未知设备'}</span>
+                        <span class="history-time">${timeAgo}</span>
+                    </div>
+                    <div class="history-details">
+                        <span class="history-source">${record.source || '未知源码'}</span>
+                        <span class="history-plugins">${record.plugins?.length || 0} 个插件</span>
+                    </div>
+                </div>
+            `;
+        });
+
+        html += '</div>';
+        historyContainer.innerHTML = html;
+    }
+
+    /**
+     * 获取状态样式类
+     */
+    getStatusClass(status) {
+        switch (status) {
+            case 'success':
+                return 'status-success';
+            case 'failed':
+                return 'status-failed';
+            case 'running':
+                return 'status-running';
+            case 'queued':
+                return 'status-queued';
+            default:
+                return 'status-unknown';
+        }
+    }
+
+    /**
+     * 获取状态图标
+     */
+    getStatusIcon(status) {
+        switch (status) {
+            case 'success':
+                return '✅';
+            case 'failed':
+                return '❌';
+            case 'running':
+                return '🔄';
+            case 'queued':
+                return '⏳';
+            default:
+                return '❓';
+        }
+    }
+
+    /**
+     * 获取时间差描述
+     */
+    getTimeAgo(timestamp) {
+        const now = Date.now();
+        const diff = now - timestamp;
+        const minutes = Math.floor(diff / (1000 * 60));
+        const hours = Math.floor(minutes / 60);
+        const days = Math.floor(hours / 24);
+
+        if (days > 0) {
+            return `${days}天前`;
+        } else if (hours > 0) {
+            return `${hours}小时前`;
+        } else if (minutes > 0) {
+            return `${minutes}分钟前`;
+        } else {
+            return '刚刚';
+        }
+    }
+
+    /**
+     * 编译开始事件处理
+     */
+    onBuildStarted(buildData) {
+        console.log('🚀 编译开始:', buildData);
+
+        // 添加到编译历史
+        const record = this.buildHistory.addRecord({
+            status: 'running',
+            source: buildData.source_branch,
+            device: buildData.target_device,
+            plugins: buildData.plugins,
+            buildId: buildData.build_id
+        });
+
+        this.currentBuildId = record.id;
+
+        // 开始监控
+        this.startMonitoring(buildData);
+
+        // 更新UI
+        this.updateBuildStatus('running', '编译进行中...');
+    }
+
+    /**
+     * 编译完成事件处理
+     */
+    onBuildCompleted(buildData) {
+        console.log('✅ 编译完成:', buildData);
+
+        // 更新历史记录
+        if (this.currentBuildId) {
+            this.buildHistory.updateRecord(this.currentBuildId, {
+                status: 'success',
+                completedAt: Date.now(),
+                artifacts: buildData.artifacts
+            });
+        }
+
+        // 停止监控
+        this.stopMonitoring();
+
+        // 更新UI
+        this.updateBuildStatus('success', '编译成功完成！');
+
+        // 显示下载链接
+        if (buildData.downloadUrl) {
+            this.showDownloadLinks(buildData.downloadUrl);
+        }
+    }
+
+    /**
+     * 编译失败事件处理
+     */
+    onBuildFailed(buildData) {
+        console.log('❌ 编译失败:', buildData);
+
+        // 更新历史记录
+        if (this.currentBuildId) {
+            this.buildHistory.updateRecord(this.currentBuildId, {
+                status: 'failed',
+                failedAt: Date.now(),
+                error: buildData.error
+            });
+        }
+
+        // 停止监控
+        this.stopMonitoring();
+
+        // 更新UI
+        this.updateBuildStatus('failed', '编译失败');
+
+        // 显示错误信息
+        if (buildData.error) {
+            this.showErrorDetails(buildData.error);
         }
     }
 
     /**
      * 开始监控编译进度
      */
-    startProgressMonitoring(runId = null) {
+    startMonitoring(buildData) {
+        if (this.isMonitoring) {
+            this.stopMonitoring();
+        }
+
         this.isMonitoring = true;
-        
-        if (runId && GITHUB_TOKEN) {
-            // 真实GitHub Actions监控
-            this.monitorGitHubActions(runId);
-        } else {
-            // 模拟编译进度
-            this.simulateBuildProgress();
-        }
-    }
+        console.log('📊 开始监控编译进度');
 
-    /**
-     * 监控GitHub Actions编译进度
-     */
-    async monitorGitHubActions(runId) {
-        let attempts = 0;
-        const maxAttempts = 120; // 最多监控2小时（每分钟检查一次）
-        
-        this.progressInterval = setInterval(async () => {
-            attempts++;
-            
-            try {
-                const workflowStatus = await this.getWorkflowStatus(runId);
-                this.processWorkflowStatus(workflowStatus);
-                
-                // 如果编译完成或达到最大尝试次数，停止监控
-                if (this.isCompletedStatus(workflowStatus.status) || attempts >= maxAttempts) {
-                    this.stopMonitoring();
-                    if (attempts >= maxAttempts) {
-                        this.addLogEntry('warning', '⚠️ 监控超时，请手动检查编译状态');
-                    }
-                }
-                
-            } catch (error) {
-                console.error('监控GitHub Actions失败:', error);
-                this.addLogEntry('warning', `⚠️ 监控连接异常: ${error.message}`);
-                
-                // 连续失败5次后切换到模拟模式
-                if (attempts % 5 === 0) {
-                    this.addLogEntry('info', '🔄 切换到模拟监控模式...');
-                    this.stopMonitoring();
-                    this.simulateBuildProgress(50); // 从50%开始模拟
-                }
-            }
-        }, 60000); // 每分钟检查一次
-    }
-
-    /**
-     * 获取GitHub工作流状态
-     */
-    async getWorkflowStatus(runId) {
-        const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/actions/runs/${runId}`, {
-            headers: {
-                'Accept': 'application/vnd.github.v3+json',
-                ...(GITHUB_TOKEN && { 'Authorization': `token ${GITHUB_TOKEN}` })
-            }
-        });
-
-        if (!response.ok) {
-            throw new Error(`GitHub API错误: ${response.status} ${response.statusText}`);
-        }
-
-        return await response.json();
-    }
-
-    /**
-     * 处理工作流状态
-     */
-    processWorkflowStatus(workflow) {
-        const { status, conclusion, created_at, updated_at } = workflow;
-        
-        this.buildStatus = status;
-        
+        // 模拟进度更新（实际应该通过API获取）
         let progress = 0;
-        let statusText = '';
-        
-        switch (status) {
-            case 'queued':
-                progress = 5;
-                statusText = '⏳ 编译任务排队中...';
-                break;
-                
-            case 'in_progress':
-                // 根据运行时间估算进度
-                const startTime = new Date(created_at).getTime();
-                const currentTime = Date.now();
-                const elapsed = currentTime - startTime;
-                const estimatedTotal = 3 * 60 * 60 * 1000; // 估计3小时完成
-                
-                progress = Math.min(90, 10 + (elapsed / estimatedTotal) * 80);
-                statusText = '🚀 正在编译中...';
-                break;
-                
-            case 'completed':
+        this.monitorInterval = setInterval(() => {
+            progress += Math.random() * 10;
+            if (progress >= 100) {
                 progress = 100;
-                if (conclusion === 'success') {
-                    statusText = '✅ 编译成功完成';
-                    this.onBuildSuccess(workflow);
-                } else if (conclusion === 'failure') {
-                    statusText = '❌ 编译失败';
-                    this.onBuildFailure(workflow);
-                } else {
-                    statusText = '⚠️ 编译异常结束';
-                }
-                break;
-                
-            case 'cancelled':
-                progress = 0;
-                statusText = '⚠️ 编译已取消';
-                this.onBuildCancelled(workflow);
-                break;
-                
-            default:
-                statusText = `📊 状态: ${status}`;
-        }
-        
-        this.updateProgress(progress, statusText);
-        this.addLogEntry('info', statusText);
-    }
-
-    /**
-     * 模拟编译进度
-     */
-    simulateBuildProgress(startProgress = 0) {
-        const stages = [
-            { progress: 5, message: '📥 初始化编译环境...', duration: 2000 },
-            { progress: 15, message: '📦 下载源码和依赖...', duration: 5000 },
-            { progress: 25, message: '🔧 配置编译选项...', duration: 3000 },
-            { progress: 35, message: '📥 更新插件源...', duration: 4000 },
-            { progress: 50, message: '🚀 开始编译内核...', duration: 8000 },
-            { progress: 65, message: '📦 编译系统包...', duration: 10000 },
-            { progress: 80, message: '🔧 编译用户插件...', duration: 12000 },
-            { progress: 90, message: '📦 打包固件镜像...', duration: 6000 },
-            { progress: 95, message: '🔍 生成校验文件...', duration: 2000 },
-            { progress: 100, message: '🎉 编译完成！', duration: 1000 }
-        ];
-
-        // 找到起始阶段
-        let currentStageIndex = stages.findIndex(stage => stage.progress >= startProgress);
-        if (currentStageIndex === -1) currentStageIndex = 0;
-
-        const runStage = () => {
-            if (currentStageIndex >= stages.length) {
-                this.onBuildSuccess();
-                return;
+                this.stopMonitoring();
             }
 
-            const stage = stages[currentStageIndex];
-            this.updateProgress(stage.progress, stage.message);
-            this.addLogEntry('info', stage.message);
-
-            currentStageIndex++;
-            
-            // 随机化下一阶段的延迟时间
-            const delay = stage.duration + Math.random() * 2000;
-            setTimeout(runStage, delay);
-        };
-
-        runStage();
-    }
-
-    /**
-     * 更新进度显示
-     */
-    updateProgress(percentage, statusText = '') {
-        const progressFill = document.getElementById('progress-fill');
-        const progressText = document.getElementById('progress-text');
-        
-        if (progressFill) {
-            progressFill.style.width = `${percentage}%`;
-        }
-        
-        if (progressText) {
-            progressText.textContent = `${Math.round(percentage)}%`;
-        }
-        
-        // 更新浏览器标题显示进度
-        if (percentage < 100) {
-            document.title = `[${Math.round(percentage)}%] OpenWrt 编译中...`;
-        } else {
-            document.title = 'OpenWrt 智能编译工具';
-        }
-    }
-
-    /**
-     * 添加日志条目
-     */
-    addLogEntry(level, message) {
-        const logsContent = document.getElementById('logs-content');
-        if (!logsContent) return;
-
-        const timestamp = new Date().toLocaleTimeString();
-        const logEntry = document.createElement('div');
-        logEntry.className = `log-entry ${level}`;
-        
-        logEntry.innerHTML = `
-            <span class="log-timestamp">${timestamp}</span>
-            <span class="log-message">${message}</span>
-        `;
-        
-        logsContent.appendChild(logEntry);
-        
-        // 自动滚动到底部
-        logsContent.scrollTop = logsContent.scrollHeight;
-        
-        // 限制日志条目数量，避免内存溢出
-        const maxLogEntries = 1000;
-        const logEntries = logsContent.querySelectorAll('.log-entry');
-        if (logEntries.length > maxLogEntries) {
-            for (let i = 0; i < logEntries.length - maxLogEntries; i++) {
-                logEntries[i].remove();
-            }
-        }
-    }
-
-    /**
-     * 切换日志显示/隐藏
-     */
-    toggleLogs() {
-        const logsContent = document.getElementById('logs-content');
-        const toggleBtn = document.getElementById('toggle-logs');
-        
-        if (!logsContent || !toggleBtn) return;
-        
-        if (logsContent.style.display === 'none') {
-            logsContent.style.display = 'block';
-            toggleBtn.textContent = '收起日志';
-        } else {
-            logsContent.style.display = 'none';
-            toggleBtn.textContent = '展开日志';
-        }
-    }
-
-    /**
-     * 编译成功回调
-     */
-    onBuildSuccess(workflow = null) {
-        this.buildStatus = 'success';
-        this.stopMonitoring();
-        
-        this.addLogEntry('info', '🎉 固件编译成功完成！');
-        
-        if (GITHUB_REPO) {
-            const releaseUrl = `https://github.com/${GITHUB_REPO}/releases`;
-            this.addLogEntry('info', `🔗 下载固件: <a href="${releaseUrl}" target="_blank">${releaseUrl}</a>`);
-        }
-        
-        // 显示成功通知
-        this.showNotification('编译成功', '固件编译完成，请前往Releases页面下载', 'success');
-        
-        // 保存构建历史
-        this.saveBuildHistory('success');
-        
-        // 重置浏览器标题
-        document.title = 'OpenWrt 智能编译工具';
-        
-        // 播放成功音效（如果浏览器支持）
-        this.playNotificationSound('success');
-    }
-
-    /**
-     * 编译失败回调
-     */
-    onBuildFailure(workflow = null) {
-        this.buildStatus = 'failure';
-        this.stopMonitoring();
-        
-        this.addLogEntry('error', '❌ 固件编译失败');
-        
-        if (GITHUB_REPO) {
-            const actionsUrl = `https://github.com/${GITHUB_REPO}/actions`;
-            this.addLogEntry('error', `🔍 查看详细日志: <a href="${actionsUrl}" target="_blank">${actionsUrl}</a>`);
-        }
-        
-        // 显示失败通知
-        this.showNotification('编译失败', '请检查配置或查看详细日志', 'error');
-        
-        // 保存构建历史
-        this.saveBuildHistory('failure');
-        
-        // 重置浏览器标题
-        document.title = 'OpenWrt 智能编译工具';
-        
-        // 播放失败音效
-        this.playNotificationSound('error');
-    }
-
-    /**
-     * 编译取消回调
-     */
-    onBuildCancelled(workflow = null) {
-        this.buildStatus = 'cancelled';
-        this.stopMonitoring();
-        
-        this.addLogEntry('warning', '⚠️ 编译任务已取消');
-        
-        // 显示取消通知
-        this.showNotification('编译取消', '编译任务已被取消', 'warning');
-        
-        // 保存构建历史
-        this.saveBuildHistory('cancelled');
+            this.updateProgressBar(Math.floor(progress));
+        }, 2000);
     }
 
     /**
      * 停止监控
      */
     stopMonitoring() {
+        if (this.monitorInterval) {
+            clearInterval(this.monitorInterval);
+            this.monitorInterval = null;
+        }
+
         this.isMonitoring = false;
-        
-        if (this.progressInterval) {
-            clearInterval(this.progressInterval);
-            this.progressInterval = null;
-        }
-        
-        if (this.logUpdateInterval) {
-            clearInterval(this.logUpdateInterval);
-            this.logUpdateInterval = null;
-        }
+        console.log('🛑 停止编译监控');
     }
 
     /**
-     * 暂停监控
+     * 更新进度条
      */
-    pauseMonitoring() {
-        if (this.progressInterval) {
-            clearInterval(this.progressInterval);
-            this.progressInterval = null;
+    updateProgressBar(progress) {
+        const progressBar = document.getElementById('progress-bar');
+        const progressText = document.getElementById('progress-text');
+
+        if (progressBar) {
+            progressBar.style.width = `${progress}%`;
+        }
+
+        if (progressText) {
+            progressText.textContent = `${progress}%`;
         }
     }
 
     /**
-     * 恢复监控
+     * 更新编译状态
      */
-    resumeMonitoring() {
-        if (this.isMonitoring && !this.progressInterval) {
-            // 重新开始监控逻辑
-            this.addLogEntry('info', '🔄 恢复编译监控...');
+    updateBuildStatus(status, message) {
+        const statusElement = document.getElementById('build-status');
+        if (statusElement) {
+            statusElement.className = `build-status ${this.getStatusClass(status)}`;
+            statusElement.innerHTML = `
+                <span class="status-icon">${this.getStatusIcon(status)}</span>
+                <span class="status-message">${message}</span>
+            `;
         }
     }
 
     /**
-     * 检查是否为完成状态
+     * 显示下载链接
      */
-    isCompletedStatus(status) {
-        return ['completed', 'cancelled', 'failure'].includes(status);
-    }
-
-    /**
-     * 显示系统通知
-     */
-    showNotification(title, message, type = 'info') {
-        // 检查浏览器通知权限
-        if ('Notification' in window && Notification.permission === 'granted') {
-            const notification = new Notification(title, {
-                body: message,
-                icon: '/favicon.ico',
-                badge: '/favicon.ico'
-            });
-            
-            setTimeout(() => notification.close(), 5000);
-        }
-        
-        // 备用：在页面上显示通知
-        this.showInPageNotification(title, message, type);
-    }
-
-    /**
-     * 页面内通知
-     */
-    showInPageNotification(title, message, type) {
-        // 创建通知元素
-        const notification = document.createElement('div');
-        notification.className = `notification notification-${type}`;
-        notification.innerHTML = `
-            <h4>${title}</h4>
-            <p>${message}</p>
-            <button onclick="this.parentElement.remove()">×</button>
-        `;
-        
-        // 添加样式
-        notification.style.cssText = `
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background: ${type === 'success' ? '#4caf50' : type === 'error' ? '#f44336' : '#ff9800'};
-            color: white;
-            padding: 15px 20px;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            z-index: 10000;
-            max-width: 300px;
-            animation: slideIn 0.3s ease;
-        `;
-        
-        document.body.appendChild(notification);
-        
-        // 5秒后自动移除
-        setTimeout(() => {
-            if (notification.parentElement) {
-                notification.remove();
-            }
-        }, 5000);
-    }
-
-    /**
-     * 播放通知音效
-     */
-    playNotificationSound(type) {
-        // 创建音频上下文
-        if ('AudioContext' in window || 'webkitAudioContext' in window) {
-            try {
-                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                const oscillator = audioContext.createOscillator();
-                const gainNode = audioContext.createGain();
-                
-                oscillator.connect(gainNode);
-                gainNode.connect(audioContext.destination);
-                
-                // 根据类型设置不同的音频参数
-                if (type === 'success') {
-                    oscillator.frequency.setValueAtTime(523.25, audioContext.currentTime); // C5
-                    oscillator.frequency.setValueAtTime(659.25, audioContext.currentTime + 0.1); // E5
-                } else if (type === 'error') {
-                    oscillator.frequency.setValueAtTime(220, audioContext.currentTime); // A3
-                } else {
-                    oscillator.frequency.setValueAtTime(440, audioContext.currentTime); // A4
-                }
-                
-                gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
-                gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3);
-                
-                oscillator.start(audioContext.currentTime);
-                oscillator.stop(audioContext.currentTime + 0.3);
-                
-            } catch (error) {
-                console.log('音频播放失败:', error);
-            }
+    showDownloadLinks(downloadUrl) {
+        const downloadContainer = document.getElementById('download-links');
+        if (downloadContainer) {
+            downloadContainer.innerHTML = `
+                <div class="download-section">
+                    <h3>📦 下载固件</h3>
+                    <div class="download-buttons">
+                        <a href="${downloadUrl}" class="btn btn-primary" target="_blank">
+                            ⬇️ 下载固件
+                        </a>
+                        <button class="btn btn-secondary" onclick="this.showChecksums()">
+                            🔒 查看校验
+                        </button>
+                    </div>
+                </div>
+            `;
+            downloadContainer.style.display = 'block';
         }
     }
 
     /**
-     * 保存构建配置
+     * 显示错误详情
      */
-    saveBuildConfig(config) {
-        Utils.storage.save(`build_config_${this.currentBuildId}`, {
-            config,
-            timestamp: Date.now(),
-            status: 'started'
-        });
-    }
-
-    /**
-     * 保存构建历史
-     */
-    saveBuildHistory(status) {
-        const history = Utils.storage.load('build_history', []);
-        
-        history.unshift({
-            id: this.currentBuildId,
-            timestamp: Date.now(),
-            status,
-            config: Utils.storage.load(`build_config_${this.currentBuildId}`)?.config
-        });
-        
-        // 只保留最近20次构建记录
-        if (history.length > 20) {
-            history.splice(20);
+    showErrorDetails(error) {
+        const errorContainer = document.getElementById('error-details');
+        if (errorContainer) {
+            errorContainer.innerHTML = `
+                <div class="error-section">
+                    <h3>❌ 编译错误</h3>
+                    <div class="error-message">
+                        <pre>${error}</pre>
+                    </div>
+                    <div class="error-actions">
+                        <button class="btn btn-secondary" onclick="this.retryBuild()">
+                            🔄 重试编译
+                        </button>
+                        <button class="btn btn-secondary" onclick="this.reportIssue()">
+                            📝 报告问题
+                        </button>
+                    </div>
+                </div>
+            `;
+            errorContainer.style.display = 'block';
         }
-        
-        Utils.storage.save('build_history', history);
     }
 
     /**
-     * 加载构建历史
+     * 重试编译
      */
-    loadBuildHistory() {
-        const history = Utils.storage.load('build_history', []);
-        console.log('构建历史:', history);
-        return history;
-    }
-
-    /**
-     * 请求通知权限
-     */
-    static async requestNotificationPermission() {
-        if ('Notification' in window && Notification.permission === 'default') {
-            const permission = await Notification.requestPermission();
-            return permission === 'granted';
+    retryBuild() {
+        if (window.wizardManager) {
+            window.wizardManager.startBuild();
         }
-        return Notification.permission === 'granted';
+    }
+
+    /**
+     * 报告问题
+     */
+    reportIssue() {
+        const repoUrl = window.GITHUB_REPO || 'your-username/your-repo';
+        const issueUrl = `https://github.com/${repoUrl}/issues/new?template=build_failure.md`;
+        window.open(issueUrl, '_blank');
+    }
+
+    /**
+     * 获取编译统计信息
+     */
+    getBuildStats() {
+        const history = this.buildHistory.getHistory();
+        const stats = {
+            total: history.length,
+            success: history.filter(r => r.status === 'success').length,
+            failed: history.filter(r => r.status === 'failed').length,
+            running: history.filter(r => r.status === 'running').length
+        };
+
+        stats.successRate = stats.total > 0 ? Math.round((stats.success / stats.total) * 100) : 0;
+
+        return stats;
+    }
+
+    /**
+     * 导出编译历史
+     */
+    exportHistory() {
+        const history = this.buildHistory.getHistory();
+        const dataStr = JSON.stringify(history, null, 2);
+        const dataBlob = new Blob([dataStr], { type: 'application/json' });
+
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(dataBlob);
+        link.download = `openwrt_build_history_${new Date().toISOString().split('T')[0]}.json`;
+        link.click();
+    }
+
+    /**
+     * 清理资源
+     */
+    cleanup() {
+        this.stopMonitoring();
+        console.log('🧹 编译控制器资源清理完成');
     }
 }
-
-// 全局构建器实例
-let globalBuilder = null;
 
 // 页面加载完成后初始化
-document.addEventListener('DOMContentLoaded', () => {
-    globalBuilder = new OpenWrtBuilder();
-    
-    // 请求通知权限
-    OpenWrtBuilder.requestNotificationPermission().then(granted => {
-        if (granted) {
-            console.log('通知权限已获取');
-        }
-    });
+document.addEventListener('DOMContentLoaded', function () {
+    console.log('🔨 初始化编译控制器');
+    window.openWrtBuilder = new OpenWrtBuilder();
 });
 
-// 导出给其他模块使用
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = OpenWrtBuilder;
-}
+// 导出类供外部使用
+window.OpenWrtBuilder = OpenWrtBuilder;
+window.Utils = Utils;
+window.BuildHistoryManager = BuildHistoryManager;
