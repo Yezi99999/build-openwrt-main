@@ -302,6 +302,8 @@ class WizardManager {
      * 绑定事件监听器
      */
     bindEvents() {
+
+    
         // 使用事件委托避免元素不存在的问题
         document.addEventListener('click', (e) => {
             try {
@@ -446,6 +448,33 @@ class WizardManager {
 
         html += '</div>';
         container.innerHTML = html;
+
+        this.bindSourceOptionEvents();
+    }
+
+    /**
+     * 绑定源码选项卡片事件
+     */
+    bindSourceOptionEvents() {
+        document.querySelectorAll('.source-option').forEach(card => {
+            card.addEventListener('click', (e) => {
+                // 阻止 a、button、input 的默认行为
+                if (
+                    e.target.tagName === 'A' ||
+                    e.target.tagName === 'BUTTON' ||
+                    e.target.tagName === 'INPUT'
+                ) return;
+                this.selectSource(card.dataset.source);
+            });
+            // 让input点击也能选中
+            const input = card.querySelector('input[type="radio"]');
+            if (input) {
+                input.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.selectSource(card.dataset.source);
+                });
+            }
+        });
     }
 
     /**
@@ -504,7 +533,34 @@ class WizardManager {
         });
 
         container.innerHTML = html;
+        this.bindDeviceOptionEvents();
     }
+
+    /**
+     * 绑定源码选项卡片事件
+     */
+    bindDeviceOptionEvents() {
+        document.querySelectorAll('.device-option').forEach(card => {
+            card.addEventListener('click', (e) => {
+                // 阻止 a、button、input 的默认行为
+                if (
+                    e.target.tagName === 'A' ||
+                    e.target.tagName === 'BUTTON' ||
+                    e.target.tagName === 'INPUT'
+                ) return;
+                this.selectDevice(card.dataset.device);
+            });
+            // 让input点击也能选中
+            const input = card.querySelector('input[type="radio"]');
+            if (input) {
+                input.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.selectDevice(card.dataset.device);
+                });
+            }
+        });
+    }
+
 
     /**
      * 渲染插件选择

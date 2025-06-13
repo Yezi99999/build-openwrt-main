@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OpenWrt 智能编译工具</title>
     <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/selection-fixes.css">
     <link rel="icon"
         href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛠️</text></svg>">
 </head>
@@ -374,6 +375,12 @@
             const configBtn = document.getElementById('configTokenBtn');
 
             const token = getValidToken();
+
+            // 增加判空，避免报错
+            if (!statusDot || !statusText || !configBtn) {
+                console.warn('Token状态指示器元素未找到');
+                return;
+            }
 
             if (token) {
                 statusDot.className = 'status-dot valid';
