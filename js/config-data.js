@@ -1,6 +1,6 @@
 // OpenWrt配置数据和常量定义
 // 请根据你的实际GitHub仓库信息修改以下配置
-const GITHUB_REPO = 'your-username/your-repo-name'; // 替换为你的GitHub仓库名
+const GITHUB_REPO = 'https://github.com/xiao69308893/build-openwrt-main.git'; // 替换为你的GitHub仓库名
 const GITHUB_TOKEN = ''; // 可选：GitHub个人访问令牌，用于API调用
 
 // 支持的设备列表
