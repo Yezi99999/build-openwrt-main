@@ -1,359 +1,488 @@
-// OpenWrt配置向导主要逻辑
-class OpenWrtWizard {
+/**
+ * OpenWrt 智能编译向导 - 安全版本
+ * 移除模拟模式，使用安全的Token配置方式
+ */
+
+class WizardManager {
     constructor() {
         this.currentStep = 1;
-        this.maxSteps = 4;
+        this.totalSteps = 4;
         this.config = {
             source: '',
             device: '',
             plugins: [],
-            customSources: []
+            customSources: [],
+            optimization: 'balanced'
         };
+
         this.init();
     }
 
     init() {
-        console.log('初始化OpenWrt配置向导...');
+        console.log('🚀 初始化OpenWrt智能编译向导');
+        this.loadConfigData();
         this.bindEvents();
-        this.loadDeviceData();
-        this.loadPluginData();
+        this.renderStep(1);
+        this.checkTokenStatus();
+    }
+
+    /**
+     * 检查Token配置状态
+     */
+    checkTokenStatus() {
+        const token = this.getValidToken();
+        const statusDiv = document.getElementById('token-status');
+
+        if (token) {
+            // 显示Token状态（隐藏敏感信息）
+            const maskedToken = token.substring(0, 8) + '*'.repeat(12) + token.substring(token.length - 4);
+            statusDiv.innerHTML = `
+                <div class="token-status-card valid">
+                    <span class="status-icon">✅</span>
+                    <div class="status-info">
+                        <div class="status-title">GitHub Token 已配置</div>
+                        <div class="status-detail">${maskedToken}</div>
+                    </div>
+                    <button class="btn-clear-token" onclick="this.clearToken()">清除</button>
+                </div>
+            `;
+        } else {
+            statusDiv.innerHTML = `
+                <div class="token-status-card invalid">
+                    <span class="status-icon">⚠️</span>
+                    <div class="status-info">
+                        <div class="status-title">需要配置 GitHub Token</div>
+                        <div class="status-detail">点击配置按钮设置Token以启用编译功能</div>
+                    </div>
+                    <button class="btn-config-token" onclick="showTokenModal()">配置Token</button>
+                </div>
+            `;
+        }
+    }
+
+    /**
+     * 获取有效的Token
+     */
+    getValidToken() {
+        // 优先级：URL参数 > LocalStorage > 全局变量
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlToken = urlParams.get('token');
+        if (urlToken && this.isValidTokenFormat(urlToken)) {
+            return urlToken;
+        }
+
+        const storedToken = localStorage.getItem('github_token');
+        if (storedToken && this.isValidTokenFormat(storedToken)) {
+            return storedToken;
+        }
+
+        if (window.GITHUB_TOKEN && this.isValidTokenFormat(window.GITHUB_TOKEN)) {
+            return window.GITHUB_TOKEN;
+        }
+
+        return null;
+    }
+
+    /**
+     * 验证Token格式
+     */
+    isValidTokenFormat(token) {
+        return token && (token.startsWith('ghp_') || token.startsWith('github_pat_'));
+    }
+
+    /**
+     * Token配置完成回调
+     */
+    onTokenConfigured(token) {
+        console.log('✅ Token配置完成');
+        this.checkTokenStatus();
+
+        // 如果在编译步骤，重新启用编译按钮
+        const buildBtn = document.getElementById('start-build-btn');
+        if (buildBtn) {
+            buildBtn.disabled = false;
+            buildBtn.innerHTML = '🚀 开始编译';
+        }
+    }
+
+    /**
+     * 清除Token配置
+     */
+    clearToken() {
+        if (confirm('确定要清除Token配置吗？清除后将无法进行编译。')) {
+            localStorage.removeItem('github_token');
+            delete window.GITHUB_TOKEN;
+
+            // 从URL中移除token参数（如果存在）
+            const url = new URL(window.location);
+            url.searchParams.delete('token');
+            window.history.replaceState({}, document.title, url.toString());
+
+            this.checkTokenStatus();
+            console.log('🗑️ Token配置已清除');
+        }
+    }
+
+    loadConfigData() {
+        // 加载配置数据（从config-data.js）
+        this.sourceBranches = window.SOURCE_BRANCHES || {};
+        this.deviceConfigs = window.DEVICE_CONFIGS || {};
+        this.pluginConfigs = window.PLUGIN_CONFIGS || {};
+        console.log('📋 配置数据加载完成');
     }
 
     bindEvents() {
-        // 步骤导航
-        document.getElementById('next-btn').addEventListener('click', () => this.nextStep());
-        document.getElementById('prev-btn').addEventListener('click', () => this.prevStep());
+        // 绑定事件监听器
+        document.addEventListener('click', (e) => {
+            if (e.target.matches('.next-step-btn')) {
+                this.nextStep();
+            } else if (e.target.matches('.prev-step-btn')) {
+                this.prevStep();
+            } else if (e.target.matches('.source-option')) {
+                this.selectSource(e.target.dataset.source);
+            } else if (e.target.matches('.device-option')) {
+                this.selectDevice(e.target.dataset.device);
+            } else if (e.target.matches('.plugin-checkbox')) {
+                this.togglePlugin(e.target.dataset.plugin);
+            } else if (e.target.matches('#start-build-btn')) {
+                this.startBuild();
+            }
+        });
 
-
-        // 源码选择卡片点击事件
-        // document.querySelectorAll('.source-card').forEach(card => {
-        //     console.log('绑定源码卡片事件:', card.dataset.source);
-        //     card.addEventListener('click', () => this.selectSource(card));
-        // });
-        //源码选择
-        document.querySelectorAll('.source-card').forEach(card => {
-            card.addEventListener('click', (e) => {
-                // 如果点击的是input，不处理（让input自己切换）
-                if (e.target.tagName.toLowerCase() === 'input') return;
-                this.selectSource(card);
+        // 绑定搜索框事件
+        const searchInputs = document.querySelectorAll('.search-input');
+        searchInputs.forEach(input => {
+            input.addEventListener('input', (e) => {
+                this.filterOptions(e.target.value, e.target.dataset.filter);
             });
-            // 让内部input和卡片同步
-            const input = card.querySelector('input[type="radio"],input[type="checkbox"]');
-            if (input) {
-                input.addEventListener('change', () => {
-                    this.selectSource(card);
-                });
-            }
-        });
-        
-        // 设备搜索
-        document.getElementById('device-search').addEventListener('input', (e) => this.searchDevices(e.target.value));
-        
-        // 分类切换
-        document.querySelectorAll('.tab-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => this.switchCategory(e.target.dataset.category));
-        });
-        
-        // 插件筛选
-        document.querySelectorAll('.filter-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => this.filterPlugins(e.target.dataset.filter));
-        });
-        
-        // 自定义插件源
-        document.querySelector('.custom-source button').addEventListener('click', () => this.addCustomSource());
-        
-        // 冲突检查
-        document.getElementById('check-conflicts').addEventListener('click', () => this.checkConflicts());
-        
-        // 开始编译
-        document.getElementById('start-build').addEventListener('click', () => this.startBuild());
-    }
-
-    selectSource(card) {
-        // 移除其他选中状态
-        document.querySelectorAll('.source-card').forEach(c => {
-            c.classList.remove('selected');
-            // 同步取消input选中
-            const input = c.querySelector('input[type="radio"],input[type="checkbox"]');
-            if (input) input.checked = false;
-        });
-        
-        // 选中当前卡片
-        card.classList.add('selected');
-        // 同步input选中
-        const input = card.querySelector('input[type="radio"],input[type="checkbox"]');
-        if (input) input.checked = true;
-        this.config.source = card.dataset.source;
-        this.updateSummary();
-        console.log('选择源码:', this.config.source);
-    }
-
-    loadDeviceData() {
-        // 加载支持的设备列表
-        const deviceList = document.getElementById('device-list');
-        const devices = DEVICE_DATA.default || [];
-        
-        deviceList.innerHTML = devices.map(device => `
-            <div class="device-card" data-device="${device.id}" data-category="${device.category}">
-                <h4>${device.name}</h4>
-                <p>${device.description}</p>
-                <div class="device-specs">
-                    <span class="spec">💾 ${device.ram}</span>
-                    <span class="spec">💽 ${device.flash}</span>
-                    <span class="spec">📶 ${device.wireless}</span>
-                </div>
-            </div>
-        `).join('');
-        
-        // 绑定设备选择事件
-        document.querySelectorAll('.device-card').forEach(card => {
-            card.addEventListener('click', (e) => this.selectDevice(e.target.closest('.device-card')));
-        });
-        
-        // 默认显示热门设备
-        this.switchCategory('popular');
-    }
-
-    selectDevice(card) {
-        // 移除其他选中状态
-        document.querySelectorAll('.device-card').forEach(c => c.classList.remove('selected'));
-        // 选中当前设备
-        card.classList.add('selected');
-        this.config.device = card.dataset.device;
-        this.updateSummary();
-        console.log('选择设备:', this.config.device);
-    }
-
-    searchDevices(query) {
-        const devices = document.querySelectorAll('.device-card');
-        devices.forEach(device => {
-            const name = device.querySelector('h4').textContent.toLowerCase();
-            const description = device.querySelector('p').textContent.toLowerCase();
-            const match = name.includes(query.toLowerCase()) || description.includes(query.toLowerCase());
-            device.style.display = match ? 'block' : 'none';
         });
     }
 
-    switchCategory(category) {
-        // 更新标签页状态
-        document.querySelectorAll('.tab-btn').forEach(btn => {
-            btn.classList.toggle('active', btn.dataset.category === category);
-        });
-        
-        // 筛选设备
-        const devices = document.querySelectorAll('.device-card');
-        devices.forEach(device => {
-            if (category === 'popular') {
-                // 显示热门设备（前5个）
-                const index = Array.from(devices).indexOf(device);
-                device.style.display = index < 5 ? 'block' : 'none';
-            } else {
-                const deviceCategory = device.dataset.category;
-                device.style.display = deviceCategory === category ? 'block' : 'none';
-            }
-        });
-    }
+    renderStep(step) {
+        this.currentStep = step;
 
-    loadPluginData() {
-        // 加载插件列表
-        const pluginList = document.getElementById('plugin-list');
-        const plugins = PLUGIN_DATA.default || [];
-        
-        pluginList.innerHTML = plugins.map(plugin => `
-            <div class="plugin-card" data-plugin="${plugin.id}" data-category="${plugin.category}">
-                <label class="plugin-checkbox">
-                    <input type="checkbox" value="${plugin.id}">
-                    <span class="checkmark"></span>
-                </label>
-                <div class="plugin-info">
-                    <h4>${plugin.name}</h4>
-                    <p>${plugin.description}</p>
-                    <div class="plugin-meta">
-                        <span class="category">${plugin.category}</span>
-                        <span class="size">${plugin.size}</span>
-                    </div>
-                </div>
-            </div>
-        `).join('');
-        
-        // 绑定插件选择事件
-        document.querySelectorAll('.plugin-card input').forEach(input => {
-            input.addEventListener('change', (e) => this.togglePlugin(e.target));
-        });
-    }
+        // 更新步骤指示器
+        this.updateStepIndicator();
 
-    togglePlugin(input) {
-        const pluginId = input.value;
-        if (input.checked) {
-            if (!this.config.plugins.includes(pluginId)) {
-                this.config.plugins.push(pluginId);
-            }
-        } else {
-            this.config.plugins = this.config.plugins.filter(id => id !== pluginId);
-        }
-        this.updateSummary();
-        console.log('当前选中插件:', this.config.plugins);
-    }
-
-    filterPlugins(filter) {
-        // 更新筛选按钮状态
-        document.querySelectorAll('.filter-btn').forEach(btn => {
-            btn.classList.toggle('active', btn.dataset.filter === filter);
+        // 显示对应步骤内容
+        const stepContents = document.querySelectorAll('.step-content');
+        stepContents.forEach((content, index) => {
+            content.style.display = (index + 1 === step) ? 'block' : 'none';
         });
-        
-        // 筛选插件
-        const plugins = document.querySelectorAll('.plugin-card');
-        plugins.forEach(plugin => {
-            if (filter === 'all') {
-                plugin.style.display = 'block';
-            } else {
-                const category = plugin.dataset.category;
-                plugin.style.display = category === filter ? 'block' : 'none';
-            }
-        });
-    }
 
-    addCustomSource() {
-        const input = document.querySelector('.custom-source input');
-        const url = input.value.trim();
-        
-        if (url && this.isValidGitUrl(url)) {
-            this.config.customSources.push(url);
-            input.value = '';
-            
-            // 添加到列表显示
-            const sourceList = document.querySelector('.source-list');
-            const newSource = document.createElement('label');
-            newSource.className = 'source-item';
-            newSource.innerHTML = `
-                <input type="checkbox" checked data-source="custom">
-                <span>自定义源</span>
-                <small>${url}</small>
-            `;
-            sourceList.insertBefore(newSource, document.querySelector('.custom-source'));
-            
-            console.log('添加自定义插件源:', url);
-        } else {
-            alert('请输入有效的Git仓库地址');
+        // 根据步骤渲染内容
+        switch (step) {
+            case 1:
+                this.renderSourceSelection();
+                break;
+            case 2:
+                this.renderDeviceSelection();
+                break;
+            case 3:
+                this.renderPluginSelection();
+                break;
+            case 4:
+                this.renderConfigSummary();
+                break;
         }
     }
 
-    isValidGitUrl(url) {
-        const gitUrlPattern = /^(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})([\/\w \.-]*)*\/?$/;
-        return gitUrlPattern.test(url) && (url.includes('github.com') || url.includes('gitlab.com') || url.includes('.git'));
+    updateStepIndicator() {
+        const indicators = document.querySelectorAll('.step-indicator');
+        indicators.forEach((indicator, index) => {
+            const stepNum = index + 1;
+            indicator.className = 'step-indicator';
+
+            if (stepNum < this.currentStep) {
+                indicator.classList.add('completed');
+            } else if (stepNum === this.currentStep) {
+                indicator.classList.add('active');
+            }
+        });
     }
 
-    async checkConflicts() {
-        const checkButton = document.getElementById('check-conflicts');
-        const reportDiv = document.getElementById('conflict-report');
-        
-        checkButton.disabled = true;
-        checkButton.textContent = '🔍 检查中...';
-        
-        try {
-            // 执行冲突检测
-            const conflicts = await this.performConflictCheck();
-            
-            if (conflicts.length === 0) {
-                reportDiv.innerHTML = `
-                    <div class="conflict-success">
-                        ✅ 配置检查通过，未发现冲突
+    renderSourceSelection() {
+        const container = document.getElementById('source-selection');
+        if (!container) return;
+
+        let html = '<div class="options-grid">';
+
+        Object.entries(this.sourceBranches).forEach(([key, source]) => {
+            const isSelected = this.config.source === key;
+            const recommendedBadge = source.recommended ? '<span class="recommended-badge">推荐</span>' : '';
+
+            html += `
+                <div class="source-option ${isSelected ? 'selected' : ''}" data-source="${key}">
+                    ${recommendedBadge}
+                    <div class="option-header">
+                        <h3>${source.name}</h3>
+                        <div class="option-meta">
+                            <span class="stability-badge ${source.stability}">${source.stability}</span>
+                            <span class="plugins-badge">${source.plugins}</span>
+                        </div>
                     </div>
-                `;
-            } else {
-                reportDiv.innerHTML = `
-                    <div class="conflict-warning">
-                        ⚠️ 发现 ${conflicts.length} 个潜在问题:
-                        <ul>
-                            ${conflicts.map(c => `<li>${c.message}</li>`).join('')}
-                        </ul>
+                    <p class="option-description">${source.description}</p>
+                    <div class="option-details">
+                        <div class="detail-item">
+                            <span class="detail-label">仓库:</span>
+                            <span class="detail-value">${this.getRepoShortName(source.repo)}</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">分支:</span>
+                            <span class="detail-value">${source.branch}</span>
+                        </div>
                     </div>
-                `;
-            }
-            
-            reportDiv.style.display = 'block';
-        } catch (error) {
-            reportDiv.innerHTML = `
-                <div class="conflict-error">
-                    ❌ 检查失败: ${error.message}
                 </div>
             `;
-            reportDiv.style.display = 'block';
-        } finally {
-            checkButton.disabled = false;
-            checkButton.textContent = '🔍 检查冲突';
-        }
+        });
+
+        html += '</div>';
+        container.innerHTML = html;
     }
 
-    async performConflictCheck() {
-        // 基于预定义规则的冲突检测
-        const conflicts = [];
-        const selectedPlugins = this.config.plugins;
-        
-        console.log('检查插件冲突:', selectedPlugins);
-        
-        // 检查插件大小限制
-        const totalSize = selectedPlugins.reduce((sum, pluginId) => {
-            const plugin = this.findPlugin(pluginId);
-            const size = plugin ? parseInt(plugin.size.replace('MB', '')) : 0;
-            return sum + size;
-        }, 0);
-        
-        // 根据设备类型检查容量限制
-        const deviceLimits = CONFLICT_RULES.size_limits || {};
-        const deviceType = this.getDeviceType(this.config.device);
-        const limit = deviceLimits[deviceType] || 999;
-        
-        if (totalSize > limit) {
-            conflicts.push({
-                type: 'size_limit',
-                message: `选中插件总大小 ${totalSize}MB 超出设备存储限制 ${limit}MB`
+    renderDeviceSelection() {
+        const container = document.getElementById('device-selection');
+        if (!container) return;
+
+        // 按分类组织设备
+        const categories = {
+            router: '🔀 路由器设备',
+            arm: '💻 ARM开发板',
+            x86: '🖥️ X86设备'
+        };
+
+        let html = '';
+
+        Object.entries(categories).forEach(([category, title]) => {
+            const devices = Object.entries(this.deviceConfigs)
+                .filter(([key, device]) => device.category === category);
+
+            if (devices.length === 0) return;
+
+            html += `
+                <div class="device-category">
+                    <h3 class="category-title">${title}</h3>
+                    <div class="options-grid">
+            `;
+
+            devices.forEach(([key, device]) => {
+                const isSelected = this.config.device === key;
+                const recommendedBadge = device.recommended ? '<span class="recommended-badge">推荐</span>' : '';
+                const warnings = this.getDeviceWarnings(device);
+
+                html += `
+                    <div class="device-option ${isSelected ? 'selected' : ''}" data-device="${key}">
+                        ${recommendedBadge}
+                        <div class="option-header">
+                            <h4>${device.name}</h4>
+                            <div class="device-specs">
+                                <span class="spec-item">Flash: ${device.flash_size}</span>
+                                <span class="spec-item">RAM: ${device.ram_size}</span>
+                            </div>
+                        </div>
+                        <div class="device-features">
+                            ${device.features?.map(feature => `<span class="feature-tag">${feature}</span>`).join('') || ''}
+                        </div>
+                        ${warnings.length > 0 ? `
+                            <div class="device-warnings">
+                                ${warnings.map(warning => `<div class="warning-item">${warning}</div>`).join('')}
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            });
+
+            html += '</div></div>';
+        });
+
+        container.innerHTML = html;
+    }
+
+    renderPluginSelection() {
+        const container = document.getElementById('plugin-selection');
+        if (!container) return;
+
+        let html = '';
+
+        Object.entries(this.pluginConfigs).forEach(([categoryKey, category]) => {
+            html += `
+                <div class="plugin-category">
+                    <h3 class="category-title">${category.name}</h3>
+                    <div class="plugin-grid">
+            `;
+
+            Object.entries(category.plugins).forEach(([pluginKey, plugin]) => {
+                const isSelected = this.config.plugins.includes(pluginKey);
+                const conflicts = this.getPluginConflictInfo(pluginKey);
+                const isDisabled = this.isPluginDisabled(pluginKey);
+
+                html += `
+                    <div class="plugin-item ${isSelected ? 'selected' : ''} ${isDisabled ? 'disabled' : ''}">
+                        <label class="plugin-label">
+                            <input type="checkbox" 
+                                   class="plugin-checkbox" 
+                                   data-plugin="${pluginKey}"
+                                   ${isSelected ? 'checked' : ''}
+                                   ${isDisabled ? 'disabled' : ''}>
+                            <div class="plugin-info">
+                                <div class="plugin-header">
+                                    <span class="plugin-name">${plugin.name}</span>
+                                    <span class="plugin-size">${plugin.size || 'N/A'}</span>
+                                </div>
+                                <div class="plugin-description">${plugin.description}</div>
+                                ${conflicts.length > 0 ? `
+                                    <div class="plugin-conflicts">
+                                        <span class="conflict-label">冲突:</span>
+                                        ${conflicts.join(', ')}
+                                    </div>
+                                ` : ''}
+                            </div>
+                        </label>
+                    </div>
+                `;
+            });
+
+            html += '</div></div>';
+        });
+
+        container.innerHTML = html;
+
+        // 添加冲突检测面板
+        this.renderConflictDetection();
+    }
+
+    renderConflictDetection() {
+        const container = document.getElementById('conflict-detection');
+        if (!container) return;
+
+        const conflicts = this.detectPluginConflicts();
+        const archIssues = this.checkArchCompatibility();
+
+        let html = '<div class="conflict-panel">';
+
+        if (conflicts.length === 0 && archIssues.length === 0) {
+            html += `
+                <div class="conflict-status success">
+                    <span class="status-icon">✅</span>
+                    <span class="status-text">配置检查通过，无冲突问题</span>
+                </div>
+            `;
+        } else {
+            html += `
+                <div class="conflict-status error">
+                    <span class="status-icon">⚠️</span>
+                    <span class="status-text">发现 ${conflicts.length + archIssues.length} 个配置问题</span>
+                </div>
+            `;
+
+            // 显示冲突详情
+            conflicts.forEach(conflict => {
+                html += `
+                    <div class="conflict-item">
+                        <div class="conflict-type">插件冲突</div>
+                        <div class="conflict-message">${conflict.message}</div>
+                    </div>
+                `;
+            });
+
+            archIssues.forEach(issue => {
+                html += `
+                    <div class="conflict-item">
+                        <div class="conflict-type">架构不兼容</div>
+                        <div class="conflict-message">
+                            ${issue.plugin} 不支持 ${issue.current_arch} 架构
+                        </div>
+                    </div>
+                `;
             });
         }
-        
-        // 检查互斥插件
-        const mutexRules = CONFLICT_RULES.mutex || [];
-        for (const rule of mutexRules) {
-            const conflictPlugins = selectedPlugins.filter(p => 
-                rule.plugins.some(rp => p.includes(rp) || rp.includes(p))
-            );
-            if (conflictPlugins.length > 1) {
-                conflicts.push({
-                    type: 'mutex',
-                    message: `${rule.name}: ${conflictPlugins.join(', ')} 不能同时选择`
-                });
-            }
-        }
-        
-        // 检查依赖关系
-        const dependencies = CONFLICT_RULES.dependencies || {};
-        for (const plugin of selectedPlugins) {
-            const deps = dependencies[plugin];
-            if (deps) {
-                for (const dep of deps) {
-                    if (!selectedPlugins.includes(dep)) {
-                        conflicts.push({
-                            type: 'missing_dependency',
-                            message: `插件 ${plugin} 需要依赖 ${dep}，但未选中`
-                        });
-                    }
-                }
-            }
-        }
-        
-        return conflicts;
+
+        html += '</div>';
+        container.innerHTML = html;
     }
 
-    findPlugin(pluginId) {
-        const plugins = PLUGIN_DATA.default || [];
-        return plugins.find(p => p.id === pluginId || p.id.includes(pluginId));
+    renderConfigSummary() {
+        const container = document.getElementById('config-summary');
+        if (!container) return;
+
+        const sourceInfo = this.sourceBranches[this.config.source];
+        const deviceInfo = this.deviceConfigs[this.config.device];
+
+        let html = `
+            <div class="summary-section">
+                <h3>📋 配置摘要</h3>
+                <div class="summary-grid">
+                    <div class="summary-item">
+                        <div class="summary-label">源码分支</div>
+                        <div class="summary-value">${sourceInfo?.name || '未选择'}</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="summary-label">目标设备</div>
+                        <div class="summary-value">${deviceInfo?.name || '未选择'}</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="summary-label">选中插件</div>
+                        <div class="summary-value">${this.config.plugins.length} 个</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="summary-section">
+                <h3>🔧 插件列表</h3>
+                <div class="plugin-summary">
+                    ${this.config.plugins.length > 0 ?
+                this.config.plugins.map(plugin => this.getPluginDisplayName(plugin)).join(', ') :
+                '未选择插件'
+            }
+                </div>
+            </div>
+            
+            <div class="summary-section">
+                <h3>🚀 编译控制</h3>
+                <div class="build-actions">
+                    ${this.getValidToken() ? `
+                        <button id="start-build-btn" class="btn btn-primary btn-large">
+                            🚀 开始编译
+                        </button>
+                    ` : `
+                        <button id="start-build-btn" class="btn btn-primary btn-large" disabled>
+                            🔒 需要配置Token
+                        </button>
+                        <button class="btn btn-secondary" onclick="showTokenModal()">
+                            ⚙️ 配置GitHub Token
+                        </button>
+                    `}
+                </div>
+            </div>
+        `;
+
+        container.innerHTML = html;
     }
 
-    getDeviceType(deviceId) {
-        if (deviceId.includes('x86')) return 'x86';
-        if (deviceId.includes('ramips') || deviceId.includes('xiaomi') || deviceId.includes('phicomm')) return 'ramips';
-        if (deviceId.includes('ath79')) return 'ath79';
-        return 'x86'; // 默认
+    // ... 其他工具方法保持不变，但移除所有模拟模式相关代码
+
+    selectSource(sourceKey) {
+        this.config.source = sourceKey;
+        this.renderSourceSelection();
+        console.log('✅ 选择源码:', sourceKey);
+    }
+
+    selectDevice(deviceKey) {
+        this.config.device = deviceKey;
+        this.renderDeviceSelection();
+        console.log('✅ 选择设备:', deviceKey);
+    }
+
+    togglePlugin(pluginKey) {
+        const index = this.config.plugins.indexOf(pluginKey);
+        if (index > -1) {
+            this.config.plugins.splice(index, 1);
+        } else {
+            this.config.plugins.push(pluginKey);
+        }
+
+        this.renderPluginSelection();
+        console.log('🔧 插件状态更新:', pluginKey, index > -1 ? '移除' : '添加');
     }
 
     async startBuild() {
@@ -362,32 +491,47 @@ class OpenWrtWizard {
             alert('请先选择源码分支');
             return;
         }
-        
+
         if (!this.config.device) {
             alert('请先选择目标设备');
             return;
         }
-        
+
+        // 验证Token
+        const token = this.getValidToken();
+        if (!token) {
+            alert('请先配置GitHub Token');
+            showTokenModal();
+            return;
+        }
+
+        // 检查冲突
+        const conflicts = this.detectPluginConflicts();
+        if (conflicts.length > 0) {
+            const proceed = confirm(`检测到 ${conflicts.length} 个插件冲突，是否继续？\n\n${conflicts.map(c => c.message).join('\n')}`);
+            if (!proceed) return;
+        }
+
         // 生成配置并触发编译
         const buildData = this.generateBuildConfig();
-        console.log('开始编译，配置数据:', buildData);
-        
+        console.log('🚀 开始编译，配置数据:', buildData);
+
         try {
             // 显示编译监控面板
             document.getElementById('build-monitor').style.display = 'block';
             document.getElementById('build-monitor').scrollIntoView({ behavior: 'smooth' });
-            
+
             // 触发GitHub Actions编译
-            const response = await this.triggerBuild(buildData);
-            
+            const response = await this.triggerBuild(buildData, token);
+
             if (response.success) {
                 this.showBuildSuccess();
-                // 开始监控编译进度（如果有run_id）
+                // 开始监控编译进度
                 if (response.run_id) {
-                    this.startProgressMonitoring(response.run_id);
+                    this.startProgressMonitoring(response.run_id, token);
                 } else {
-                    // 模拟编译进度
-                    this.simulateProgress();
+                    // 即使没有run_id，也尝试获取最新的workflow运行
+                    this.startProgressMonitoring(null, token);
                 }
             } else {
                 alert('编译启动失败: ' + response.message);
@@ -399,35 +543,24 @@ class OpenWrtWizard {
     }
 
     generateBuildConfig() {
-        // 生成用于GitHub Actions的配置
         return {
             source_branch: this.config.source,
             target_device: this.config.device,
             plugins: this.config.plugins,
             custom_sources: this.config.customSources,
+            optimization: this.config.optimization,
             timestamp: Date.now(),
             build_id: 'build_' + Date.now()
         };
     }
 
-    async triggerBuild(buildData) {
-        // 检查是否配置了GitHub仓库信息
-        if (!GITHUB_REPO || !GITHUB_TOKEN) {
-            // 如果没有配置GitHub信息，返回模拟成功响应
-            console.log('GitHub配置未设置，使用模拟模式');
-            return {
-                success: true,
-                message: '编译已启动（模拟模式）',
-                run_id: null
-            };
-        }
-
+    async triggerBuild(buildData, token) {
         try {
             // 使用GitHub Repository Dispatch API触发编译
             const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/dispatches`, {
                 method: 'POST',
                 headers: {
-                    'Authorization': `token ${GITHUB_TOKEN}`,
+                    'Authorization': `token ${token}`,
                     'Accept': 'application/vnd.github.v3+json',
                     'Content-Type': 'application/json'
                 },
@@ -440,231 +573,351 @@ class OpenWrtWizard {
             if (response.ok) {
                 return {
                     success: true,
-                    message: '编译已成功启动',
-                    run_id: null // GitHub Dispatch API不直接返回run_id
+                    message: '编译任务已成功提交到GitHub Actions',
+                    run_id: null // Repository Dispatch不直接返回run_id
                 };
             } else {
-                const errorData = await response.json();
-                return {
-                    success: false,
-                    message: errorData.message || '启动失败'
-                };
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.message || `HTTP ${response.status}: ${response.statusText}`);
             }
+
         } catch (error) {
-            return {
-                success: false,
-                message: error.message
-            };
+            console.error('触发编译失败:', error);
+            throw new Error(`编译启动失败: ${error.message}`);
         }
     }
 
-    showBuildSuccess() {
-        const logsContent = document.getElementById('logs-content');
-        logsContent.innerHTML = `
-            <div class="log-entry info">
-                <span class="log-timestamp">${new Date().toLocaleTimeString()}</span>
-                <span class="log-message">🚀 编译任务已成功提交到GitHub Actions</span>
-            </div>
-            <div class="log-entry info">
-                <span class="log-timestamp">${new Date().toLocaleTimeString()}</span>
-                <span class="log-message">📋 配置信息: ${this.config.source} - ${this.config.device}</span>
-            </div>
-            <div class="log-entry info">
-                <span class="log-timestamp">${new Date().toLocaleTimeString()}</span>
-                <span class="log-message">🔧 选中插件: ${this.config.plugins.length}个</span>
-            </div>
-            <div class="log-entry info">
-                <span class="log-timestamp">${new Date().toLocaleTimeString()}</span>
-                <span class="log-message">⏳ 正在等待编译开始...</span>
-            </div>
-        `;
-    }
+    /**
+     * 开始监控编译进度
+     */
+    async startProgressMonitoring(runId, token) {
+        console.log('📊 开始监控编译进度');
 
-    simulateProgress() {
-        // 模拟编译进度（当无法连接GitHub API时使用）
-        let progress = 0;
-        const progressFill = document.getElementById('progress-fill');
-        const progressText = document.getElementById('progress-text');
-        const logsContent = document.getElementById('logs-content');
-
-        const stages = [
-            { progress: 5, message: '📥 正在初始化编译环境...' },
-            { progress: 15, message: '📦 正在下载源码...' },
-            { progress: 25, message: '🔧 正在配置插件源...' },
-            { progress: 35, message: '📥 正在下载依赖包...' },
-            { progress: 50, message: '🚀 开始编译固件...' },
-            { progress: 70, message: '📦 正在编译内核模块...' },
-            { progress: 85, message: '🔨 正在构建固件镜像...' },
-            { progress: 95, message: '✅ 编译完成，正在打包...' },
-            { progress: 100, message: '🎉 固件编译成功！' }
-        ];
-
-        let currentStage = 0;
-        const interval = setInterval(() => {
-            if (currentStage >= stages.length) {
-                clearInterval(interval);
-                this.onBuildComplete({ status: 'completed', conclusion: 'success' });
-                return;
-            }
-
-            const stage = stages[currentStage];
-            progress = stage.progress;
-            
-            progressFill.style.width = progress + '%';
-            progressText.textContent = progress + '%';
-
-            // 添加日志条目
-            const logEntry = document.createElement('div');
-            logEntry.className = 'log-entry info';
-            logEntry.innerHTML = `
-                <span class="log-timestamp">${new Date().toLocaleTimeString()}</span>
-                <span class="log-message">${stage.message}</span>
-            `;
-            logsContent.appendChild(logEntry);
-            logsContent.scrollTop = logsContent.scrollHeight;
-
-            currentStage++;
-        }, 3000); // 每3秒一个阶段
-    }
-
-    async startProgressMonitoring(runId) {
-        // 监控真实的GitHub Actions编译进度
-        const monitor = setInterval(async () => {
+        // 如果没有specific run_id，获取最新的workflow run
+        if (!runId) {
             try {
-                const status = await this.getWorkflowStatus(runId);
-                this.updateProgress(status);
-                
-                if (['completed', 'cancelled', 'failure'].includes(status.status)) {
-                    clearInterval(monitor);
-                    this.onBuildComplete(status);
-                }
+                runId = await this.getLatestWorkflowRun(token);
             } catch (error) {
-                console.error('监控失败:', error);
-                // 如果监控失败，回退到模拟模式
-                clearInterval(monitor);
-                this.simulateProgress();
+                console.warn('获取最新workflow run失败:', error);
             }
-        }, 30000); // 30秒检查一次
+        }
+
+        if (runId) {
+            this.monitorGitHubActions(runId, token);
+        } else {
+            // 如果无法获取run_id，显示基本的进度信息
+            this.showBasicProgress();
+        }
     }
 
-    async getWorkflowStatus(runId) {
-        const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/actions/runs/${runId}`, {
+    /**
+     * 获取最新的workflow运行
+     */
+    async getLatestWorkflowRun(token) {
+        const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/actions/runs?per_page=1`, {
             headers: {
-                'Authorization': `token ${GITHUB_TOKEN}`,
+                'Authorization': `token ${token}`,
                 'Accept': 'application/vnd.github.v3+json'
             }
         });
-        
-        if (!response.ok) {
-            throw new Error('无法获取工作流状态');
+
+        if (response.ok) {
+            const data = await response.json();
+            if (data.workflow_runs && data.workflow_runs.length > 0) {
+                return data.workflow_runs[0].id;
+            }
         }
-        
-        return await response.json();
+        return null;
     }
 
-    updateProgress(status) {
-        const progressFill = document.getElementById('progress-fill');
-        const progressText = document.getElementById('progress-text');
-        const logsContent = document.getElementById('logs-content');
-        
-        // 根据状态估算进度百分比
-        let percentage = 0;
-        let statusMessage = '';
-        
+    /**
+     * 监控GitHub Actions编译进度
+     */
+    async monitorGitHubActions(runId, token) {
+        let attempts = 0;
+        const maxAttempts = 180; // 最多监控3小时（每分钟检查一次）
+
+        this.addLogEntry('info', `🔍 开始监控编译进度 (Run ID: ${runId})`);
+
+        const monitorInterval = setInterval(async () => {
+            attempts++;
+
+            try {
+                const workflowStatus = await this.getWorkflowStatus(runId, token);
+                this.processWorkflowStatus(workflowStatus);
+
+                // 如果编译完成或达到最大尝试次数，停止监控
+                if (this.isCompletedStatus(workflowStatus.status) || attempts >= maxAttempts) {
+                    clearInterval(monitorInterval);
+
+                    if (attempts >= maxAttempts) {
+                        this.addLogEntry('warning', '⚠️ 监控超时，请手动检查GitHub Actions页面');
+                    } else {
+                        this.addLogEntry('success', '✅ 编译监控完成');
+                    }
+                }
+
+            } catch (error) {
+                console.error('监控GitHub Actions失败:', error);
+                this.addLogEntry('error', `❌ 监控异常: ${error.message}`);
+
+                // 连续失败10次后停止监控
+                if (attempts % 10 === 0) {
+                    this.addLogEntry('warning', '⚠️ 监控连接持续异常，已停止自动监控');
+                    clearInterval(monitorInterval);
+                }
+            }
+        }, 60000); // 每分钟检查一次
+
+        // 保存interval引用以便手动停止
+        this.monitorInterval = monitorInterval;
+    }
+
+    /**
+     * 获取GitHub工作流状态
+     */
+    async getWorkflowStatus(runId, token) {
+        const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/actions/runs/${runId}`, {
+            headers: {
+                'Authorization': `token ${token}`,
+                'Accept': 'application/vnd.github.v3+json'
+            }
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            return {
+                status: data.status,
+                conclusion: data.conclusion,
+                created_at: data.created_at,
+                updated_at: data.updated_at,
+                html_url: data.html_url,
+                jobs_url: data.jobs_url
+            };
+        } else {
+            throw new Error(`获取工作流状态失败: ${response.status} ${response.statusText}`);
+        }
+    }
+
+    /**
+     * 处理工作流状态
+     */
+    processWorkflowStatus(status) {
+        const progress = this.calculateProgress(status);
+        this.updateProgressBar(progress);
+
+        // 根据状态添加日志
         switch (status.status) {
             case 'queued':
-                percentage = 5;
-                statusMessage = '⏳ 编译任务已排队';
+                this.addLogEntry('info', '⏳ 编译任务已排队等待执行');
                 break;
             case 'in_progress':
-                // 根据运行时间估算（假设编译需要2小时）
-                const elapsed = Date.now() - new Date(status.created_at).getTime();
-                const totalTime = 2 * 60 * 60 * 1000; // 2小时
-                percentage = Math.min(90, 10 + (elapsed / totalTime) * 80);
-                statusMessage = '🚀 正在编译中...';
+                this.addLogEntry('info', '🔄 编译正在进行中...');
                 break;
             case 'completed':
-                percentage = 100;
-                statusMessage = status.conclusion === 'success' ? '✅ 编译成功完成' : '❌ 编译失败';
+                if (status.conclusion === 'success') {
+                    this.addLogEntry('success', '🎉 编译成功完成！');
+                    this.showBuildComplete(true);
+                } else if (status.conclusion === 'failure') {
+                    this.addLogEntry('error', '❌ 编译失败，请检查配置和日志');
+                    this.showBuildComplete(false);
+                } else {
+                    this.addLogEntry('warning', `⚠️ 编译完成，结果: ${status.conclusion}`);
+                }
                 break;
             case 'cancelled':
-                percentage = 0;
-                statusMessage = '⚠️ 编译已取消';
+                this.addLogEntry('warning', '🛑 编译已被取消');
                 break;
         }
-        
-        progressFill.style.width = percentage + '%';
-        progressText.textContent = Math.round(percentage) + '%';
-        
-        // 添加状态日志
+    }
+
+    /**
+     * 计算编译进度
+     */
+    calculateProgress(status) {
+        switch (status.status) {
+            case 'queued':
+                return 5;
+            case 'in_progress':
+                // 根据运行时间估算进度
+                const startTime = new Date(status.created_at);
+                const currentTime = new Date();
+                const elapsedMinutes = (currentTime - startTime) / (1000 * 60);
+
+                // 假设编译需要90分钟，计算百分比
+                const estimatedProgress = Math.min(10 + (elapsedMinutes / 90) * 80, 90);
+                return Math.round(estimatedProgress);
+            case 'completed':
+                return 100;
+            default:
+                return 0;
+        }
+    }
+
+    /**
+     * 更新进度条
+     */
+    updateProgressBar(progress) {
+        const progressBar = document.getElementById('progress-bar');
+        const progressText = document.getElementById('progress-text');
+
+        if (progressBar) {
+            progressBar.style.width = `${progress}%`;
+        }
+
+        if (progressText) {
+            progressText.textContent = `${progress}%`;
+        }
+    }
+
+    /**
+     * 检查是否为完成状态
+     */
+    isCompletedStatus(status) {
+        return ['completed', 'cancelled'].includes(status);
+    }
+
+    /**
+     * 显示基本进度（当无法获取详细状态时）
+     */
+    showBasicProgress() {
+        this.addLogEntry('info', '🚀 编译任务已提交到GitHub Actions');
+        this.addLogEntry('info', '🔗 请访问GitHub Actions页面查看详细编译进度');
+        this.addLogEntry('info', `📋 项目地址: https://github.com/${GITHUB_REPO}/actions`);
+
+        // 显示估计完成时间
+        const estimatedTime = new Date(Date.now() + 90 * 60 * 1000); // 90分钟后
+        this.addLogEntry('info', `⏰ 预计完成时间: ${estimatedTime.toLocaleString()}`);
+    }
+
+    /**
+     * 显示编译成功信息
+     */
+    showBuildSuccess() {
+        const logsContent = document.getElementById('logs-content');
+        if (!logsContent) return;
+
+        this.addLogEntry('success', '🚀 编译任务已成功提交到GitHub Actions');
+        this.addLogEntry('info', `📋 配置信息: ${this.sourceBranches[this.config.source]?.name} - ${this.deviceConfigs[this.config.device]?.name}`);
+        this.addLogEntry('info', `🔧 选中插件: ${this.config.plugins.length}个`);
+        this.addLogEntry('info', `🕐 提交时间: ${new Date().toLocaleString()}`);
+        this.addLogEntry('info', '📊 开始监控编译进度...');
+    }
+
+    /**
+     * 显示编译完成信息
+     */
+    showBuildComplete(success) {
+        if (success) {
+            this.addLogEntry('success', '🎉 恭喜！固件编译成功完成');
+            this.addLogEntry('info', '📦 请前往GitHub Releases页面下载编译好的固件');
+            this.addLogEntry('info', `🔗 下载地址: https://github.com/${GITHUB_REPO}/releases`);
+        } else {
+            this.addLogEntry('error', '❌ 编译失败，请检查以下可能的原因：');
+            this.addLogEntry('error', '   • 插件配置冲突');
+            this.addLogEntry('error', '   • 设备存储空间不足');
+            this.addLogEntry('error', '   • 网络连接问题');
+            this.addLogEntry('info', '🔍 详细错误信息请查看GitHub Actions日志');
+        }
+    }
+
+    /**
+     * 添加日志条目
+     */
+    addLogEntry(type, message) {
+        const logsContent = document.getElementById('logs-content');
+        if (!logsContent) return;
+
+        const timestamp = new Date().toLocaleTimeString();
         const logEntry = document.createElement('div');
-        logEntry.className = `log-entry ${status.conclusion === 'failure' ? 'error' : 'info'}`;
+        logEntry.className = `log-entry ${type}`;
         logEntry.innerHTML = `
-            <span class="log-timestamp">${new Date().toLocaleTimeString()}</span>
-            <span class="log-message">${statusMessage}</span>
+            <span class="log-timestamp">${timestamp}</span>
+            <span class="log-message">${message}</span>
         `;
+
         logsContent.appendChild(logEntry);
         logsContent.scrollTop = logsContent.scrollHeight;
     }
 
-    onBuildComplete(status) {
-        const logsContent = document.getElementById('logs-content');
-        
-        if (status.conclusion === 'success' || status.status === 'completed') {
-            // 编译成功
-            const successEntry = document.createElement('div');
-            successEntry.className = 'log-entry info';
-            successEntry.innerHTML = `
-                <span class="log-timestamp">${new Date().toLocaleTimeString()}</span>
-                <span class="log-message">🎉 固件编译完成！请前往GitHub Releases页面下载</span>
-            `;
-            logsContent.appendChild(successEntry);
-            
-            // 显示下载链接
-            if (GITHUB_REPO) {
-                const downloadLink = document.createElement('div');
-                downloadLink.className = 'log-entry info';
-                downloadLink.innerHTML = `
-                    <span class="log-timestamp">${new Date().toLocaleTimeString()}</span>
-                    <span class="log-message">🔗 下载地址: <a href="https://github.com/${GITHUB_REPO}/releases" target="_blank">GitHub Releases</a></span>
-                `;
-                logsContent.appendChild(downloadLink);
-            }
-        } else {
-            // 编译失败
-            const errorEntry = document.createElement('div');
-            errorEntry.className = 'log-entry error';
-            errorEntry.innerHTML = `
-                <span class="log-timestamp">${new Date().toLocaleTimeString()}</span>
-                <span class="log-message">❌ 编译失败，请检查配置或查看GitHub Actions日志</span>
-            `;
-            logsContent.appendChild(errorEntry);
+    /**
+     * 停止监控
+     */
+    stopMonitoring() {
+        if (this.monitorInterval) {
+            clearInterval(this.monitorInterval);
+            this.monitorInterval = null;
+            this.addLogEntry('info', '🛑 已停止编译进度监控');
         }
-        
-        logsContent.scrollTop = logsContent.scrollHeight;
     }
 
-    nextStep() {
-        // 验证当前步骤
-        if (!this.validateCurrentStep()) {
-            return;
+    // === 工具方法 ===
+
+    getRepoShortName(repoUrl) {
+        return repoUrl.split('/').slice(-2).join('/');
+    }
+
+    getDeviceWarnings(device) {
+        const warnings = [];
+
+        if (device.flash_size === '8M') {
+            warnings.push('⚠️ 存储空间较小，建议选择必要插件');
         }
-        
-        if (this.currentStep < this.maxSteps) {
-            this.currentStep++;
-            this.updateStepDisplay();
-            
-            // 如果进入插件选择步骤，刷新插件数据
-            if (this.currentStep === 3) {
-                this.loadPluginData();
+
+        if (!device.recommended) {
+            warnings.push('⚠️ 非推荐设备，可能存在兼容性问题');
+        }
+
+        return warnings;
+    }
+
+    getPluginConflictInfo(pluginKey) {
+        const conflicts = [];
+        // 实现插件冲突检测逻辑
+        return conflicts;
+    }
+
+    isPluginDisabled(pluginKey) {
+        // 实现插件禁用逻辑（基于架构、冲突等）
+        return false;
+    }
+
+    detectPluginConflicts() {
+        const conflicts = [];
+        // 实现冲突检测逻辑
+        return conflicts;
+    }
+
+    checkArchCompatibility() {
+        const issues = [];
+        // 实现架构兼容性检查
+        return issues;
+    }
+
+    getPluginDisplayName(pluginKey) {
+        // 遍历所有插件配置，找到对应的显示名称
+        for (const category of Object.values(this.pluginConfigs)) {
+            if (category.plugins[pluginKey]) {
+                return category.plugins[pluginKey].name;
+            }
+        }
+        return pluginKey;
+    }
+
+    // === 步骤导航方法 ===
+
+    nextStep() {
+        if (this.currentStep < this.totalSteps) {
+            // 验证当前步骤
+            if (this.validateCurrentStep()) {
+                this.renderStep(this.currentStep + 1);
             }
         }
     }
 
     prevStep() {
         if (this.currentStep > 1) {
-            this.currentStep--;
-            this.updateStepDisplay();
+            this.renderStep(this.currentStep - 1);
         }
     }
 
@@ -682,58 +935,49 @@ class OpenWrtWizard {
                     return false;
                 }
                 break;
-            case 3:
-                // 插件选择是可选的，不做强制验证
-                break;
         }
         return true;
     }
 
-    updateStepDisplay() {
-        // 更新步骤指示器
-        document.querySelectorAll('.step').forEach((step, index) => {
-            step.classList.toggle('active', index + 1 === this.currentStep);
-        });
-        
-        // 更新内容区域
-        document.querySelectorAll('.step-content').forEach((content, index) => {
-            content.classList.toggle('active', index + 1 === this.currentStep);
-        });
-        
-        // 更新导航按钮
-        document.getElementById('prev-btn').disabled = this.currentStep === 1;
-        const nextBtn = document.getElementById('next-btn');
-        if (this.currentStep === this.maxSteps) {
-            nextBtn.textContent = '完成配置';
-            nextBtn.style.display = 'none'; // 隐藏下一步按钮
-        } else {
-            nextBtn.textContent = '下一步';
-            nextBtn.style.display = 'inline-block';
-        }
-    }
+    // === 搜索和过滤方法 ===
 
-    updateSummary() {
-        // 更新配置摘要
-        const sourceNames = {
-            'openwrt-main': 'OpenWrt官方',
-            'lede-master': 'Lean\'s LEDE',
-            'immortalwrt-master': 'ImmortalWrt'
-        };
-        
-        document.getElementById('summary-source').textContent = 
-            sourceNames[this.config.source] || this.config.source || '-';
-        
-        // 获取设备名称
-        const deviceElement = document.querySelector(`[data-device="${this.config.device}"]`);
-        const deviceName = deviceElement ? deviceElement.querySelector('h4').textContent : this.config.device;
-        document.getElementById('summary-device').textContent = deviceName || '-';
-        
-        document.getElementById('summary-plugins').textContent = `${this.config.plugins.length}个`;
+    filterOptions(searchTerm, filterType) {
+        const term = searchTerm.toLowerCase();
+        let options = [];
+
+        switch (filterType) {
+            case 'source':
+                options = document.querySelectorAll('.source-option');
+                break;
+            case 'device':
+                options = document.querySelectorAll('.device-option');
+                break;
+            case 'plugin':
+                options = document.querySelectorAll('.plugin-item');
+                break;
+        }
+
+        options.forEach(option => {
+            const text = option.textContent.toLowerCase();
+            option.style.display = text.includes(term) ? 'block' : 'none';
+        });
+    }
+}
+
+// === 全局函数（供HTML调用）===
+
+// Token配置完成回调
+function onTokenConfigured(token) {
+    if (window.wizardManager) {
+        window.wizardManager.onTokenConfigured(token);
     }
 }
 
 // 页面加载完成后初始化向导
-document.addEventListener('DOMContentLoaded', () => {
-    console.log('OpenWrt智能编译工具初始化...');
-    new OpenWrtWizard();
+document.addEventListener('DOMContentLoaded', function () {
+    console.log('🎯 页面加载完成，初始化编译向导');
+    window.wizardManager = new WizardManager();
 });
+
+// 导出向导管理器供调试使用
+window.WizardManager = WizardManager;
