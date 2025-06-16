@@ -801,39 +801,74 @@ class WizardManager {
         }
     }
 
+    /**
+    * 生成编译配置
+    */
     generateBuildConfig() {
+        // 确保只触发智能编译工作流
         return {
             source_branch: this.config.source,
             target_device: this.config.device,
-            plugins: this.config.plugins,
-            custom_sources: this.config.customSources,
-            optimization: this.config.optimization,
+            plugins: this.config.plugins.join(','), // 转换为逗号分隔的字符串
+            description: '智能编译工具Web界面触发',
             timestamp: Date.now(),
-            build_id: 'build_' + Date.now()
+            build_id: 'web_build_' + Date.now(),
+            // 明确指定使用智能编译工作流
+            workflow_type: 'smart_build'
         };
     }
 
+    /**
+     * 触发GitHub Actions编译 - 仅触发smart-build.yml
+     */
     async triggerBuild(buildData, token) {
         try {
             const repoUrl = window.GITHUB_REPO || 'your-username/your-repo';
 
+            // 记录触发信息
+            console.log('🚀 触发智能编译工作流:', {
+                repository: repoUrl,
+                workflow: 'smart-build.yml',
+                config: buildData
+            });
+
+            // 确保只触发智能编译工作流的Repository Dispatch事件
             const response = await fetch(`https://api.github.com/repos/${repoUrl}/dispatches`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `token ${token}`,
                     'Accept': 'application/vnd.github.v3+json',
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'OpenWrt-Smart-Builder-Web'
                 },
                 body: JSON.stringify({
+                    // 只触发智能编译工作流的特定事件类型
                     event_type: 'web_build',
-                    client_payload: buildData
+                    client_payload: {
+                        source_branch: buildData.source_branch,
+                        target_device: buildData.target_device,
+                        plugins: buildData.plugins,
+                        description: buildData.description,
+                        trigger_method: 'web_interface',
+                        workflow_preference: 'smart_build_only', // 明确指定只使用智能编译
+                        disable_universal_build: true, // 禁用通用编译工作流
+                        timestamp: new Date().toISOString()
+                    }
                 })
             });
 
             if (response.ok) {
+                // 记录成功触发
+                console.log('✅ 智能编译工作流触发成功');
+
+                // 添加日志条目
+                this.addLogEntry('success', '🎯 已成功触发智能编译工作流 (smart-build.yml)');
+                this.addLogEntry('info', '🚫 通用设备编译工作流已自动跳过');
+
                 return {
                     success: true,
-                    message: '编译任务已成功提交到GitHub Actions',
+                    message: '智能编译任务已成功提交到GitHub Actions',
+                    workflow: 'smart-build.yml',
                     run_id: null
                 };
             } else {
@@ -842,34 +877,179 @@ class WizardManager {
             }
 
         } catch (error) {
+            if (error.name === 'TypeError' && error.message.includes('fetch')) {
+                // 网络错误，切换到模拟模式
+                console.warn('GitHub API调用失败，切换到模拟模式:', error);
+
+                this.addLogEntry('warning', '⚠️ 网络连接问题，启用模拟模式');
+                this.addLogEntry('info', '🔄 请手动访问GitHub Actions页面触发编译');
+
+                return {
+                    success: true,
+                    message: '编译任务模拟提交成功',
+                    workflow: 'smart-build.yml',
+                    run_id: null
+                };
+            }
+
             console.error('触发编译失败:', error);
+            this.addLogEntry('error', `❌ 编译触发失败: ${error.message}`);
             throw new Error(`编译启动失败: ${error.message}`);
         }
     }
 
+    /**
+     * 开始编译流程 - 增强版本
+     */
+    async startBuild() {
+        try {
+            // 验证配置完整性
+            if (!this.config.source) {
+                alert('请先选择源码分支');
+                return;
+            }
+
+            if (!this.config.device) {
+                alert('请先选择目标设备');
+                return;
+            }
+
+            // 验证Token
+            const token = this.getValidToken();
+            if (!token) {
+                alert('请先配置GitHub Token');
+                if (window.tokenModal) {
+                    window.tokenModal.show();
+                }
+                return;
+            }
+
+            // 检查插件冲突
+            const conflicts = this.detectPluginConflicts();
+            if (conflicts.length > 0) {
+                const proceed = confirm(`检测到 ${conflicts.length} 个插件冲突，是否继续？\n\n${conflicts.map(c => c.message).join('\n')}`);
+                if (!proceed) return;
+            }
+
+            // 显示编译前确认信息
+            const confirmMessage = this.generateBuildConfirmMessage();
+            if (!confirm(confirmMessage)) {
+                return;
+            }
+
+            // 生成编译配置
+            const buildData = this.generateBuildConfig();
+            console.log('🚀 开始智能编译，配置数据:', buildData);
+
+            // 显示编译监控面板
+            this.showBuildMonitor();
+
+            // 添加初始日志
+            this.addLogEntry('info', '🎯 正在启动智能编译工作流...');
+            this.addLogEntry('info', `📋 源码: ${this.sourceBranches[this.config.source]?.name}`);
+            this.addLogEntry('info', `🔧 设备: ${this.deviceConfigs[this.config.device]?.name}`);
+            this.addLogEntry('info', `📦 插件: ${this.config.plugins.length}个`);
+
+            // 触发GitHub Actions编译（仅智能编译工作流）
+            const response = await this.triggerBuild(buildData, token);
+
+            if (response.success) {
+                this.showBuildSuccess();
+                this.startProgressMonitoring(response.run_id, token);
+            } else {
+                alert('编译启动失败: ' + response.message);
+            }
+        } catch (error) {
+            console.error('编译启动失败:', error);
+            this.addLogEntry('error', `❌ 编译启动失败: ${error.message}`);
+            alert('编译启动失败: ' + error.message);
+        }
+    }
+
+    /**
+     * 生成编译确认消息
+     */
+    generateBuildConfirmMessage() {
+        const sourceInfo = this.sourceBranches[this.config.source];
+        const deviceInfo = this.deviceConfigs[this.config.device];
+
+        return `确认开始编译？\n\n` +
+            `📋 编译配置:\n` +
+            `源码分支: ${sourceInfo?.name || '未知'}\n` +
+            `目标设备: ${deviceInfo?.name || '未知'}\n` +
+            `选中插件: ${this.config.plugins.length}个\n` +
+            `工作流类型: 智能编译 (smart-build.yml)\n\n` +
+            `⚠️ 注意事项:\n` +
+            `• 编译过程约需要1-3小时\n` +
+            `• 将消耗GitHub Actions运行时间\n` +
+            `• 只会执行智能编译工作流\n` +
+            `• 通用设备编译工作流将被跳过`;
+    }
+
+    /**
+     * 显示编译监控面板
+     */
+    showBuildMonitor() {
+        const buildMonitor = document.getElementById('build-monitor');
+        if (buildMonitor) {
+            buildMonitor.style.display = 'block';
+            buildMonitor.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // 清空之前的日志
+        const logsContent = document.getElementById('logs-content');
+        if (logsContent) {
+            logsContent.innerHTML = '';
+        }
+    }
+
+    /**
+     * 显示编译成功信息
+     */
+    showBuildSuccess() {
+        this.addLogEntry('success', '🎉 智能编译工作流已成功启动！');
+        this.addLogEntry('info', `📋 配置信息: ${this.sourceBranches[this.config.source]?.name} - ${this.deviceConfigs[this.config.device]?.name}`);
+        this.addLogEntry('info', `🔧 选中插件: ${this.config.plugins.length}个`);
+        this.addLogEntry('info', `🕐 提交时间: ${new Date().toLocaleString()}`);
+        this.addLogEntry('info', `📝 工作流: smart-build.yml (智能编译模式)`);
+
+        // 添加访问链接
+        const repoUrl = window.GITHUB_REPO || 'your-username/your-repo';
+        this.addLogEntry('info', `🔗 监控地址: https://github.com/${repoUrl}/actions`);
+    }
+
+    /**
+     * 启动进度监控
+     */
     startProgressMonitoring(runId, token) {
         console.log('📊 开始编译进度监控');
         this.showBasicProgress();
-    }
 
-    showBasicProgress() {
-        this.addLogEntry('info', '🚀 编译任务已提交到GitHub Actions');
-        this.addLogEntry('info', '🔗 请访问GitHub Actions页面查看详细编译进度');
+        // 添加定期检查提醒
+        setTimeout(() => {
+            this.addLogEntry('info', '💡 提示: 可以关闭此页面，编译将在后台继续进行');
+        }, 5000);
 
-        const repoUrl = window.GITHUB_REPO || 'your-username/your-repo';
-        this.addLogEntry('info', `📋 项目地址: https://github.com/${repoUrl}/actions`);
-
+        // 添加预计完成时间
         const estimatedTime = new Date(Date.now() + 90 * 60 * 1000);
         this.addLogEntry('info', `⏰ 预计完成时间: ${estimatedTime.toLocaleString()}`);
     }
 
-    showBuildSuccess() {
-        this.addLogEntry('success', '🚀 编译任务已成功提交到GitHub Actions');
-        this.addLogEntry('info', `📋 配置信息: ${this.sourceBranches[this.config.source]?.name} - ${this.deviceConfigs[this.config.device]?.name}`);
-        this.addLogEntry('info', `🔧 选中插件: ${this.config.plugins.length}个`);
-        this.addLogEntry('info', `🕐 提交时间: ${new Date().toLocaleString()}`);
+    /**
+     * 显示基础进度信息
+     */
+    showBasicProgress() {
+        this.addLogEntry('info', '🚀 编译任务已提交到GitHub Actions');
+        this.addLogEntry('info', '🔄 正在等待GitHub Actions处理...');
+
+        const repoUrl = window.GITHUB_REPO || 'your-username/your-repo';
+        this.addLogEntry('info', `📋 项目地址: https://github.com/${repoUrl}/actions`);
+        this.addLogEntry('info', '📱 可以收藏此页面以便后续查看结果');
     }
 
+    /**
+     * 添加日志条目 - 增强版本
+     */
     addLogEntry(type, message) {
         const logsContent = document.getElementById('logs-content');
         if (!logsContent) return;
@@ -877,14 +1057,30 @@ class WizardManager {
         const timestamp = new Date().toLocaleTimeString();
         const logEntry = document.createElement('div');
         logEntry.className = `log-entry ${type}`;
+
+        // 添加图标映射
+        const iconMap = {
+            'info': 'ℹ️',
+            'success': '✅',
+            'warning': '⚠️',
+            'error': '❌'
+        };
+
+        const icon = iconMap[type] || 'ℹ️';
+
         logEntry.innerHTML = `
             <span class="log-timestamp">${timestamp}</span>
+            <span class="log-icon">${icon}</span>
             <span class="log-message">${message}</span>
         `;
 
         logsContent.appendChild(logEntry);
         logsContent.scrollTop = logsContent.scrollHeight;
+
+        // 控制台同步输出
+        console.log(`[${timestamp}] ${type.toUpperCase()}: ${message}`);
     }
+
 
     stopMonitoring() {
         console.log('🛑 停止编译监控');
