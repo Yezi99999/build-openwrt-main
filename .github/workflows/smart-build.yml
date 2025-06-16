@@ -345,7 +345,9 @@ jobs:
               EXT="${file##*.}"
               # 生成新文件名
               TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-              NEW_NAME="OpenWrt_${{ env.SOURCE_NAME // /}}_${{ env.DEVICE_NAME // /_}}_${TIMESTAMP}.${EXT}"
+              SOURCE_NAME_CLEAN=$(echo "${SOURCE_NAME:-${{ env.SOURCE_NAME }}}" | tr -d ' ')
+              DEVICE_NAME_CLEAN=$(echo "${DEVICE_NAME:-${{ env.DEVICE_NAME }}}" | tr ' ' '_')
+              NEW_NAME="OpenWrt_${SOURCE_NAME_CLEAN}_${DEVICE_NAME_CLEAN}_${TIMESTAMP}.${EXT}"
               mv "$file" "$NEW_NAME"
               echo "📦 重命名: $file -> $NEW_NAME"
             fi
