@@ -439,12 +439,35 @@ jobs:
           echo "🔧 开始生成最终编译配置..."
           cd openwrt
           
-          # 处理插件配置
+          # 设备推荐插件
+          RECOMMEND_PLUGINS=""
+          case "${{ needs.prepare.outputs.target_device }}" in
+            "x86_64")
+              RECOMMEND_PLUGINS="luci kmod-e1000 kmod-igb"
+              ;;
+            "xiaomi_4a_gigabit"|"newifi_d2")
+              RECOMMEND_PLUGINS="luci kmod-mt76 kmod-usb2"
+              ;;
+            "rpi_4b")
+              RECOMMEND_PLUGINS="luci kmod-usb3 kmod-sound-core kmod-fs-ext4"
+              ;;
+            "nanopi_r2s")
+              RECOMMEND_PLUGINS="luci kmod-usb-net-rtl8152"
+              ;;
+            *)
+              RECOMMEND_PLUGINS="luci"
+              ;;
+          esac
+
+          # 合并用户插件和推荐插件，去重
           PLUGINS="${{ needs.prepare.outputs.plugins_list }}"
-          if [ -n "$PLUGINS" ]; then
+          ALL_PLUGINS="$RECOMMEND_PLUGINS $PLUGINS"
+          # 去重
+          ALL_PLUGINS=$(echo $ALL_PLUGINS | tr ' ' '\n' | sort | uniq | tr '\n' ' ')
+
+          if [ -n "$ALL_PLUGINS" ]; then
             echo "🔧 配置选中的插件..."
-            IFS=',' read -ra PLUGIN_ARRAY <<< "$PLUGINS"
-            for plugin in "${PLUGIN_ARRAY[@]}"; do
+            for plugin in $ALL_PLUGINS; do
               plugin=$(echo "$plugin" | xargs)  # 去除空格
               if [ -n "$plugin" ]; then
                 echo "CONFIG_PACKAGE_$plugin=y" >> .config
