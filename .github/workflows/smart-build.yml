@@ -434,31 +434,6 @@ jobs:
           ./scripts/feeds install -a
           echo "✅ feeds安装完成"
 
-      - name: ⚙️ 加载自定义配置
-        run: |
-          echo "⚙️ 开始加载自定义配置..."
-          
-          # 如果存在files目录则复制
-          [[ -d "files" ]] && mv -f files openwrt/files
-          
-          # 如果存在对应分支的配置文件则使用
-          if [ -f "${{ needs.prepare.outputs.config_file }}" ]; then
-            cp -f ${{ needs.prepare.outputs.config_file }} openwrt/.config
-            echo "📋 使用自定义配置文件: ${{ needs.prepare.outputs.config_file }}"
-          else
-            echo "📋 使用默认配置"
-          fi
-          
-          # 执行第二阶段自定义脚本（feeds安装后）
-          if [ -f "${{ needs.prepare.outputs.diy_p2_sh }}" ]; then
-            chmod +x ${{ needs.prepare.outputs.diy_p2_sh }}
-            cd openwrt/
-            $GITHUB_WORKSPACE/${{ needs.prepare.outputs.diy_p2_sh }}
-            echo "🔧 执行第二阶段自定义脚本完成"
-          fi
-          
-          echo "✅ 自定义配置加载完成"
-
       - name: 🔧 生成最终编译配置
         run: |
           echo "🔧 开始生成最终编译配置..."
