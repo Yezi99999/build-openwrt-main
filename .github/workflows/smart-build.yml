@@ -199,7 +199,7 @@ jobs:
           echo "diy_p1_sh=$DIY_P1_SH" >> $GITHUB_OUTPUT
           echo "diy_p2_sh=$DIY_P2_SH" >> $GITHUB_OUTPUT
           
-          echo "✅ 编译环境初始化完成" 配置解析完成"
+          echo "✅ 编译环境初始化完成,配置解析完成"
 
   # 编译阶段：实际的固件编译过程
   build:
@@ -379,7 +379,7 @@ jobs:
           df -h
           
           echo "status=success" >> $GITHUB_OUTPUT
-          echo "✅ 编译环境初始化完成" 编译环境初始化完成"
+          echo "✅ 编译环境初始化完成, 编译环境初始化完成"
 
       - name: 📦 克隆源码
         id: codes
