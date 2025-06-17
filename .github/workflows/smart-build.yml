@@ -89,12 +89,6 @@ jobs:
       - name: 🔧 初始化管理脚本
         run: |
           echo "🔧 初始化配置管理和插件数据库..."
-
-          # 创建工作目录
-          echo "📁 创建工作目录..."
-          sudo mkdir -p /workdir
-          sudo chown $USER:$GROUPS /workdir
-          
           
           # 给脚本添加执行权限
           chmod +x script/*.sh
@@ -500,9 +494,22 @@ jobs:
           echo "🔧 清理APT缓存..."
           sudo -E apt-get -qq autoremove --purge
           sudo -E apt-get -qq clean
+
+          # 创建工作目录
+          echo "📁 创建工作目录..."
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
           
           echo "🔧 设置时区..."
           sudo timedatectl set-timezone "$TZ"
+
+          # 验证关键工具
+          echo "✅ 验证编译环境..."
+          echo "GCC版本: $(gcc --version | head -1)"
+          echo "Make版本: $(make --version | head -1)"
+          echo "Git版本: $(git --version)"
+          echo "Python版本: $(python3 --version)"
+          echo "CMake版本: $(cmake --version | head -1 2>/dev/null || echo '未安装')"
 
       - name: 📦 克隆源码
         id: codes
