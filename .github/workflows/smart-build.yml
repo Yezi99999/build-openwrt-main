@@ -325,13 +325,27 @@ jobs:
           # 设置输出
           echo "complete_config=.config" >> $GITHUB_OUTPUT
 
+      - name: 🕵️ 检查配置文件
+        run: ls -l .config feeds.conf.default
+        continue-on-error: false  # 如果文件不存在，继续执行后续步骤
+
+      - name: 🔧 生成缓存键
+        id: cache
+        run: |
+          echo "📦 生成缓存键..."
+          CACHE_KEY="${{ steps.config.outputs.cache_key }}"
+          echo "cache_key=$CACHE_KEY" >> $GITHUB_OUTPUT
+          
+          # 输出缓存键
+          echo "🔑 缓存键: $CACHE_KEY"
+
       - name: 📤 上传配置文件
         uses: actions/upload-artifact@v4
         with:
           name: build-configs
           path: |
-            /home/runner/work/build-openwrt-main/build-openwrt-main/.config
-            ${{ github.workspace }}/feeds.conf.default
+            .config
+            feeds.conf.default
           if-no-files-found: error  # 关键设置
 
   # 主编译任务

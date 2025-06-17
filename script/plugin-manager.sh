@@ -704,6 +704,9 @@ generate_plugin_config() {
     fi
     
     log_info "生成插件配置..."
+
+    echo "脚本当前目录: $(pwd)"
+    echo "生成的 feeds.conf.default 路径: $(realpath "$output_file")"
     
     # 解析插件列表
     IFS=',' read -ra plugins <<< "$plugin_list"
@@ -780,8 +783,7 @@ generate_plugin_config() {
         log_success "配置已保存到: $output_file"
     fi
 
-    echo "脚本当前目录: $(pwd)"
-    echo "生成的 feeds.conf.default 路径: $(realpath "$output_file")"
+    
 }
 
 # 生成配置格式
