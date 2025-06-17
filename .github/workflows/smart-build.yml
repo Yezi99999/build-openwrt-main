@@ -464,6 +464,16 @@ jobs:
           # 设置输出
           echo "complete_config=.config" >> $GITHUB_OUTPUT
 
+      # ✨ 新增：上传配置文件为artifacts
+      - name: 📤 上传配置文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-configs
+          path: |
+            feeds.conf.default
+            .config
+          retention-days: 1
+
   # 主编译任务
   build:
     runs-on: ubuntu-24.04
@@ -474,6 +484,13 @@ jobs:
     steps:
       - name: 🚀 检出代码
         uses: actions/checkout@v4
+
+      # ✨ 新增：下载配置文件
+      - name: 📥 下载配置文件
+        uses: actions/download-artifact@v4
+        with:
+          name: build-configs
+          path: ./
 
       - name: 🔧 初始化编译环境
         env:
@@ -529,8 +546,20 @@ jobs:
           echo "  提交时间: $(git log -1 --format=%cd)"
           echo "  提交信息: $(git log -1 --format=%s)"
 
+      # ✨ 修复：验证配置文件并复制
       - name: 🔧 复制配置文件
         run: |
+          echo "🔍 验证配置文件..."
+          if [ ! -f "feeds.conf.default" ]; then
+            echo "❌ feeds.conf.default 文件不存在"
+            exit 1
+          fi
+          
+          if [ ! -f ".config" ]; then
+            echo "❌ .config 文件不存在"
+            exit 1
+          fi
+          
           echo "🔧 复制feeds配置文件..."
           cp feeds.conf.default openwrt/feeds.conf.default
           
@@ -539,6 +568,9 @@ jobs:
           
           echo "📋 当前feeds配置:"
           cat openwrt/feeds.conf.default
+          
+          echo "📋 编译配置预览:"
+          head -10 openwrt/.config
 
       - name: 🔧 第一阶段自定义脚本
         run: |
@@ -614,6 +646,7 @@ jobs:
           echo "📋 配置差异对比:"
           ./scripts/diffconfig.sh || true
 
+      # ✨ 新增：下载配置文件
       - name: 📥 下载依赖包
         run: |
           cd openwrt
@@ -781,29 +814,3 @@ jobs:
 
           echo "📋 显示磁盘使用情况..."
           df -h
-
-  # 后处理任务
-  post-process:
-    runs-on: ubuntu-24.04
-    name: 📋 后处理任务
-    needs: [prepare, build]
-    if: always()
-    
-    steps:
-      - name: 📊 编译结果统计
-        run: |
-          echo "📊 编译结果统计"
-          echo "=================="
-          echo "源码分支: ${{ needs.prepare.outputs.source_name }}"
-          echo "目标设备: ${{ needs.prepare.outputs.device_name }}"
-          echo "编译状态: ${{ needs.build.result }}"
-          echo "开始时间: ${{ github.event.head_commit.timestamp }}"
-          echo "结束时间: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-          
-          if [[ "${{ needs.build.result }}" == "success" ]]; then
-            echo "✅ 编译成功完成！"
-            echo "🎉 固件已发布到Releases页面"
-          else
-            echo "❌ 编译失败"
-            echo "💡 请检查编译日志查找错误原因"
-          fi
