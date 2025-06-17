@@ -317,6 +317,11 @@ jobs:
           echo "📄 配置文件预览:"
           head -20 .config
           echo "... (更多配置) ..."
+
+          echo "📋 文件生成验证:"
+          ls -la .config
+          echo "生成路径: $(realpath .config)"
+
           # 设置输出
           echo "complete_config=.config" >> $GITHUB_OUTPUT
 
@@ -325,9 +330,9 @@ jobs:
         with:
           name: build-configs
           path: |
-            feeds.conf.default
-            .config
-          retention-days: 1
+            ${{ github.workspace }}/.config
+            ${{ github.workspace }}/feeds.conf.default
+          if-no-files-found: error  # 关键设置
 
   # 主编译任务
   build:

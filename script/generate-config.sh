@@ -358,6 +358,8 @@ main() {
     
     echo "✅ 配置文件生成完成！"
     echo ""
+    echo "脚本当前目录: $(pwd)"
+    echo "生成的 .config 路径: $(realpath .config)"
     echo "📄 文件位置: $output_file"
     echo "📏 文件大小: $(wc -l < "$output_file") 行"
 }
