@@ -83,6 +83,31 @@ jobs:
       - name: 🚀 检出代码
         uses: actions/checkout@v4
 
+      - name: 🔧 初始化管理脚本
+        run: |
+          echo "🔧 初始化配置管理和插件数据库..."
+          
+          # 给脚本添加执行权限
+          chmod +x script/*.sh
+          
+          # 检查并安装jq工具（用于JSON处理）
+          if ! command -v jq &> /dev/null; then
+            echo "📦 安装jq工具..."
+            sudo apt-get update -qq
+            sudo apt-get install -y jq
+          fi
+          
+          # 初始化配置管理
+          echo "🔧 初始化配置管理..."
+          ./script/generate-config.sh init
+          
+          # 初始化插件数据库
+          echo "🔧 初始化插件数据库..."
+          ./script/plugin-manager.sh init
+
+            
+          echo "✅ 管理脚本初始化完成"
+
       - name: 🔧 解析编译配置
         id: config
         run: |
