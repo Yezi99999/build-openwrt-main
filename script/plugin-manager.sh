@@ -779,6 +779,9 @@ generate_plugin_config() {
         esac
         log_success "配置已保存到: $output_file"
     fi
+
+    echo "脚本当前目录: $(pwd)"
+    echo "生成的 feeds.conf.default 路径: $(realpath "$output_file")"
 }
 
 # 生成配置格式

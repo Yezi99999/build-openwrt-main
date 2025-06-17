@@ -330,7 +330,7 @@ jobs:
         with:
           name: build-configs
           path: |
-            ${{ github.workspace }}/.config
+            /home/runner/work/build-openwrt-main/build-openwrt-main/.config
             ${{ github.workspace }}/feeds.conf.default
           if-no-files-found: error  # 关键设置
 
