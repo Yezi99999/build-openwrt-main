@@ -107,6 +107,11 @@ jobs:
           # 初始化插件数据库
           echo "🔧 初始化插件数据库..."
           ./script/plugin-manager.sh init
+
+           # 创建工作目录
+          echo "📁 创建工作目录..."
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
           
           echo "✅ 管理脚本初始化完成"
 
@@ -497,12 +502,18 @@ jobs:
           echo "🔧 设置时区..."
           sudo timedatectl set-timezone "$TZ"
 
-      - name: 📥 下载源码
+      - name: 📦 克隆源码
+        id: codes
+        working-directory: /workdir
         run: |
           echo "📥 下载源码: ${{ needs.prepare.outputs.repo_url }}"
           echo "📥 分支: ${{ needs.prepare.outputs.repo_branch }}"
+          
           git clone ${{ needs.prepare.outputs.repo_url }} -b ${{ needs.prepare.outputs.repo_branch }} openwrt
-
+          
+          # 链接到当前目录
+          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+          
           cd openwrt
           echo "📋 源码信息:"
           echo "  提交ID: $(git rev-parse HEAD)"
