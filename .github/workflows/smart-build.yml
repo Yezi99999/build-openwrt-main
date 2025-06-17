@@ -365,22 +365,16 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: build-configs
-          path: configs/  # 下载到 configs 子目录
+          path: ./
           
       - name: 🔍 检查下载的文件和目录
         run: |
           echo "当前目录结构:"
           ls -la
-          echo "configs/ 目录内容:"
-          ls -la configs/
           echo "检查文件是否存在:"
-          [ -f "configs/.config" ] && echo ".config 存在" || echo ".config 不存在"
-          [ -f "configs/feeds.conf.default" ] && echo "feeds.conf.default 存在" || echo "feeds.conf.default 不存在"
+          [ -f ".config" ] && echo ".config 存在" || echo ".config 不存在"
+          [ -f "feeds.conf.default" ] && echo "feeds.conf.default 存在" || echo "feeds.conf.default 不存在"
 
-      - name: 🔧 复制配置文件
-        run: |
-          cp configs/.config ./
-          cp configs/feeds.conf.default ./
 
       - name: 🔧 验证配置文件
         run: |
