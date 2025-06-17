@@ -1,7 +1,7 @@
 #========================================================================================================================
-# 🛠️ OpenWrt 智能编译工作流 - 优化版本
+# 🛠️ OpenWrt 智能编译工作流 - 修复版本
 # 功能: 接收Web界面传递的配置参数，智能编译指定设备和插件的固件
-# 特性: 整合脚本功能、动态feeds配置、完整配置生成
+# 特性: 使用generate-config.sh生成配置、动态feeds配置、完整配置生成
 #========================================================================================================================
 
 name: 🛠️ 智能编译固件
@@ -61,7 +61,7 @@ env:
   CACHE_TOOLCHAIN: true
 
 jobs:
-  # 预处理任务 - 整合脚本功能
+  # 预处理任务 - 生成配置
   prepare:
     runs-on: ubuntu-24.04
     name: 📋 准备编译环境
@@ -78,38 +78,10 @@ jobs:
       device_target: ${{ steps.config.outputs.device_target }}
       build_tag: ${{ steps.config.outputs.build_tag }}
       cache_key: ${{ steps.config.outputs.cache_key }}
-      config_file: ${{ steps.config.outputs.config_file }}
-      feeds_conf: ${{ steps.config.outputs.feeds_conf }}
-      complete_config: ${{ steps.config.outputs.complete_config }}
 
     steps:
       - name: 🚀 检出代码
         uses: actions/checkout@v4
-
-      - name: 🔧 初始化管理脚本
-        run: |
-          echo "🔧 初始化配置管理和插件数据库..."
-          
-          # 给脚本添加执行权限
-          chmod +x script/*.sh
-          
-          # 检查并安装jq工具（用于JSON处理）
-          if ! command -v jq &> /dev/null; then
-            echo "📦 安装jq工具..."
-            sudo apt-get update -qq
-            sudo apt-get install -y jq
-          fi
-          
-          # 初始化配置管理
-          echo "🔧 初始化配置管理..."
-          ./script/config-manager.sh init
-          
-          # 初始化插件数据库
-          echo "🔧 初始化插件数据库..."
-          ./script/plugin-manager.sh init
-
-           
-          echo "✅ 管理脚本初始化完成"
 
       - name: 🔧 解析编译配置
         id: config
@@ -306,165 +278,21 @@ jobs:
           # 设置输出
           echo "feeds_conf=feeds.conf.default" >> $GITHUB_OUTPUT
 
-      - name: 🔧 生成完整编译配置
-        id: complete_config
+      - name: 🔧 生成编译配置文件
         run: |
-          echo "📋 生成完整的编译配置文件..."
+          echo "📋 使用generate-config.sh生成编译配置文件..."
           
-          # 创建完整的config文件
-          cat > .config << EOF
-          # 目标平台配置
-          CONFIG_TARGET_$(echo "${{ steps.config.outputs.device_target }}" | cut -d'/' -f1)=y
-          CONFIG_TARGET_$(echo "${{ steps.config.outputs.device_target }}" | sed 's/\//_/g')=y
-          CONFIG_TARGET_$(echo "${{ steps.config.outputs.device_target }}" | sed 's/\//_/g')_DEVICE_${{ steps.config.outputs.device_profile }}=y
+          # 确保脚本有执行权限
+          chmod +x script/generate-config.sh
           
-          # 设备信息配置
-          CONFIG_TARGET_BOARD="$(echo "${{ steps.config.outputs.device_target }}" | cut -d'/' -f1)"
-          CONFIG_TARGET_SUBTARGET="$(echo "${{ steps.config.outputs.device_target }}" | cut -d'/' -f2)"
-          CONFIG_TARGET_PROFILE="${{ steps.config.outputs.device_profile }}"
-          CONFIG_TARGET_ARCH_PACKAGES="$(echo "${{ steps.config.outputs.device_target }}" | cut -d'/' -f1)"
+          # 生成配置文件
+          ./script/generate-config.sh "${{ steps.config.outputs.target_device }}" "${{ steps.config.outputs.plugins_list }}" .config
           
-          # 根文件系统配置
-          CONFIG_TARGET_ROOTFS_EXT4FS=y
-          CONFIG_TARGET_ROOTFS_SQUASHFS=y
-          CONFIG_TARGET_IMAGES_GZIP=y
-          CONFIG_TARGET_KERNEL_PARTSIZE=32
-          CONFIG_TARGET_ROOTFS_PARTSIZE=512
-          
-          # 镜像生成器配置
-          CONFIG_IB=y
-          CONFIG_IB_STANDALONE=y
-          CONFIG_IMAGEOPT=y
-          CONFIG_VERSIONOPT=y
-          CONFIG_VERSION_FILENAMES=y
-          
-          # 基础系统包
-          CONFIG_PACKAGE_base-files=y
-          CONFIG_PACKAGE_busybox=y
-          CONFIG_PACKAGE_ca-bundle=y
-          CONFIG_PACKAGE_ca-certificates=y
-          CONFIG_PACKAGE_dnsmasq-full=y
-          CONFIG_PACKAGE_dropbear=y
-          CONFIG_PACKAGE_firewall4=y
-          CONFIG_PACKAGE_fstools=y
-          CONFIG_PACKAGE_jsonfilter=y
-          CONFIG_PACKAGE_logd=y
-          CONFIG_PACKAGE_mtd=y
-          CONFIG_PACKAGE_netifd=y
-          CONFIG_PACKAGE_openwrt-keyring=y
-          CONFIG_PACKAGE_procd=y
-          CONFIG_PACKAGE_procd-ujail=y
-          CONFIG_PACKAGE_uci=y
-          CONFIG_PACKAGE_uclient-fetch=y
-          CONFIG_PACKAGE_urandom-seed=y
-          CONFIG_PACKAGE_urngd=y
-          
-          # 内核模块
-          CONFIG_PACKAGE_kmod-lib-crc-ccitt=y
-          CONFIG_PACKAGE_kmod-lib-crc16=y
-          CONFIG_PACKAGE_kmod-nf-conntrack=y
-          CONFIG_PACKAGE_kmod-nf-conntrack6=y
-          CONFIG_PACKAGE_kmod-nf-nat=y
-          CONFIG_PACKAGE_kmod-nf-reject=y
-          CONFIG_PACKAGE_kmod-nf-reject6=y
-          CONFIG_PACKAGE_kmod-nft-core=y
-          CONFIG_PACKAGE_kmod-nft-fib=y
-          CONFIG_PACKAGE_kmod-nft-nat=y
-          CONFIG_PACKAGE_kmod-nft-offload=y
-          CONFIG_PACKAGE_kmod-slhc=y
-          
-          # LuCI Web界面
-          CONFIG_PACKAGE_luci=y
-          CONFIG_PACKAGE_luci-ssl-openssl=y
-          CONFIG_PACKAGE_luci-app-firewall=y
-          CONFIG_PACKAGE_luci-app-opkg=y
-          CONFIG_PACKAGE_luci-mod-admin-full=y
-          CONFIG_PACKAGE_luci-mod-network=y
-          CONFIG_PACKAGE_luci-mod-status=y
-          CONFIG_PACKAGE_luci-mod-system=y
-          CONFIG_PACKAGE_luci-proto-ipv6=y
-          CONFIG_PACKAGE_luci-proto-ppp=y
-          CONFIG_PACKAGE_luci-theme-bootstrap=y
-          
-          # 网络工具
-          CONFIG_PACKAGE_wget-ssl=y
-          CONFIG_PACKAGE_curl=y
-          CONFIG_PACKAGE_ip-full=y
-          CONFIG_PACKAGE_iptables-nft=y
-          CONFIG_PACKAGE_kmod-ipt-core=y
-          CONFIG_PACKAGE_kmod-ipt-nat=y
-          
-          # 系统工具
-          CONFIG_PACKAGE_htop=y
-          CONFIG_PACKAGE_nano=y
-          CONFIG_PACKAGE_tree=y
-          CONFIG_PACKAGE_vim=y
-          CONFIG_PACKAGE_bash=y
-          
-          # SSL支持
-          CONFIG_PACKAGE_libopenssl=y
-          CONFIG_PACKAGE_openssl-util=y
-          
-          # 针对不同设备的特殊配置
-          EOF
-          
-          # 根据设备类型添加特殊配置
-          case "${{ steps.config.outputs.target_device }}" in
-            "x86_64")
-              cat >> .config << 'EOF'
-          # X86_64 特殊配置
-          CONFIG_PACKAGE_kmod-usb-core=y
-          CONFIG_PACKAGE_kmod-usb-storage=y
-          CONFIG_PACKAGE_kmod-usb2=y
-          CONFIG_PACKAGE_kmod-usb3=y
-          CONFIG_PACKAGE_block-mount=y
-          CONFIG_PACKAGE_kmod-fs-ext4=y
-          CONFIG_PACKAGE_kmod-fs-vfat=y
-          CONFIG_PACKAGE_kmod-nls-cp437=y
-          CONFIG_PACKAGE_kmod-nls-iso8859-1=y
-          CONFIG_PACKAGE_kmod-nls-utf8=y
-          EOF
-              ;;
-            "rpi_4b")
-              cat >> .config << 'EOF'
-          # 树莓派4B 特殊配置
-          CONFIG_PACKAGE_kmod-brcmfmac=y
-          CONFIG_PACKAGE_kmod-cfg80211=y
-          CONFIG_PACKAGE_wpad-basic-wolfssl=y
-          CONFIG_PACKAGE_wireless-regdb=y
-          EOF
-              ;;
-            *)
-              cat >> .config << 'EOF'
-          # 路由器设备通用配置
-          CONFIG_PACKAGE_wpad-basic-wolfssl=y
-          CONFIG_PACKAGE_wireless-regdb=y
-          CONFIG_PACKAGE_kmod-cfg80211=y
-          EOF
-              ;;
-          esac
-          
-          # 如果有插件列表，添加插件配置
-          if [ -n "${{ steps.config.outputs.plugins_list }}" ]; then
-            echo "# 用户选择的插件" >> .config
-            IFS=',' read -ra PLUGINS <<< "${{ steps.config.outputs.plugins_list }}"
-            for plugin in "${PLUGINS[@]}"; do
-              plugin=$(echo "$plugin" | xargs) # 去除空格
-              if [ -n "$plugin" ]; then
-                echo "CONFIG_PACKAGE_${plugin}=y" >> .config
-              fi
-            done
-          fi
-          
-          echo "✅ 完整配置文件生成完成"
-          echo "📋 配置文件预览:"
+          echo "📋 配置文件生成完成！"
+          echo "📄 配置文件预览:"
           head -20 .config
           echo "... (更多配置) ..."
-          
-          # 设置输出
-          echo "complete_config=.config" >> $GITHUB_OUTPUT
 
-      # ✨ 新增：上传配置文件为artifacts
       - name: 📤 上传配置文件
         uses: actions/upload-artifact@v4
         with:
@@ -485,12 +313,31 @@ jobs:
       - name: 🚀 检出代码
         uses: actions/checkout@v4
 
-      # ✨ 新增：下载配置文件
       - name: 📥 下载配置文件
         uses: actions/download-artifact@v4
         with:
           name: build-configs
           path: ./
+
+      - name: 🔧 验证配置文件
+        run: |
+          echo "🔍 验证配置文件..."
+          if [ ! -f "feeds.conf.default" ]; then
+            echo "❌ feeds.conf.default 文件不存在"
+            exit 1
+          fi
+          
+          if [ ! -f ".config" ]; then
+            echo "❌ .config 文件不存在"
+            exit 1
+          fi
+          
+          echo "✅ 配置文件验证通过"
+          echo "📋 feeds配置:"
+          cat feeds.conf.default
+          echo ""
+          echo "📋 编译配置预览:"
+          head -10 .config
 
       - name: 🔧 初始化编译环境
         env:
@@ -526,10 +373,8 @@ jobs:
           echo "Make版本: $(make --version | head -1)"
           echo "Git版本: $(git --version)"
           echo "Python版本: $(python3 --version)"
-          echo "CMake版本: $(cmake --version | head -1 2>/dev/null || echo '未安装')"
 
       - name: 📦 克隆源码
-        id: codes
         working-directory: /workdir
         run: |
           echo "📥 下载源码: ${{ needs.prepare.outputs.repo_url }}"
@@ -546,20 +391,8 @@ jobs:
           echo "  提交时间: $(git log -1 --format=%cd)"
           echo "  提交信息: $(git log -1 --format=%s)"
 
-      # ✨ 修复：验证配置文件并复制
       - name: 🔧 复制配置文件
         run: |
-          echo "🔍 验证配置文件..."
-          if [ ! -f "feeds.conf.default" ]; then
-            echo "❌ feeds.conf.default 文件不存在"
-            exit 1
-          fi
-          
-          if [ ! -f ".config" ]; then
-            echo "❌ .config 文件不存在"
-            exit 1
-          fi
-          
           echo "🔧 复制feeds配置文件..."
           cp feeds.conf.default openwrt/feeds.conf.default
           
@@ -600,7 +433,6 @@ jobs:
               ;;
           esac
           
-          # 如果有插件，可能需要添加额外的feeds源（已在feeds配置中处理）
           echo "✅ 第一阶段自定义脚本执行完成"
 
       - name: 📦 更新feeds
@@ -646,7 +478,6 @@ jobs:
           echo "📋 配置差异对比:"
           ./scripts/diffconfig.sh || true
 
-      # ✨ 新增：下载配置文件
       - name: 📥 下载依赖包
         run: |
           cd openwrt
@@ -814,3 +645,29 @@ jobs:
 
           echo "📋 显示磁盘使用情况..."
           df -h
+
+  # 后处理任务
+  post-process:
+    runs-on: ubuntu-24.04
+    name: 📋 后处理任务
+    needs: [prepare, build]
+    if: always()
+    
+    steps:
+      - name: 📊 编译结果统计
+        run: |
+          echo "📊 编译结果统计"
+          echo "=================="
+          echo "源码分支: ${{ needs.prepare.outputs.source_name }}"
+          echo "目标设备: ${{ needs.prepare.outputs.device_name }}"
+          echo "编译状态: ${{ needs.build.result }}"
+          echo "开始时间: ${{ github.event.head_commit.timestamp }}"
+          echo "结束时间: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          
+          if [[ "${{ needs.build.result }}" == "success" ]]; then
+            echo "✅ 编译成功完成！"
+            echo "🎉 固件已发布到Releases页面"
+          else
+            echo "❌ 编译失败"
+            echo "💡 请检查编译日志查找错误原因"
+          fi
