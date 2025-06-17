@@ -342,11 +342,11 @@ jobs:
       - name: 📤 上传配置文件
         uses: actions/upload-artifact@v4
         with:
-          name: build-configs
+          name: build-configs-${{ github.run_number }}  # 添加运行号确保唯一性
           path: |
             .config
             feeds.conf.default
-          if-no-files-found: error  # 关键设置
+          if-no-files-found: error
 
   # 主编译任务
   build:
@@ -364,17 +364,72 @@ jobs:
       - name: 📥 下载配置文件
         uses: actions/download-artifact@v4
         with:
-          name: build-configs
-          path: ./
+          name: build-configs-${{ github.run_number }}
+          path: ./configs/
           
       - name: 🔍 检查下载的文件和目录
         run: |
           echo "当前目录结构:"
           ls -la
-          echo "检查文件是否存在:"
-          [ -f ".config" ] && echo ".config 存在" || echo ".config 不存在"
-          [ -f "feeds.conf.default" ] && echo "feeds.conf.default 存在" || echo "feeds.conf.default 不存在"
+          echo ""
+          echo "configs/ 目录内容:"
+          ls -la configs/ || echo "configs/ 目录不存在"
+          echo ""
+          echo "检查下载的文件是否存在:"
+          if [ -f "configs/.config" ]; then
+            echo "✅ .config 存在 ($(stat -c%s configs/.config) 字节)"
+          else
+            echo "❌ .config 不存在"
+          fi
+          
+          if [ -f "configs/feeds.conf.default" ]; then
+            echo "✅ feeds.conf.default 存在 ($(stat -c%s configs/feeds.conf.default) 字节)"
+          else
+            echo "❌ feeds.conf.default 不存在"
+          fi
+          
+          # 额外检查：显示所有可能的config文件
+          echo ""
+          echo "查找所有 .config 文件:"
+          find . -name ".config" -type f 2>/dev/null || echo "未找到 .config 文件"
+          
+          echo ""
+          echo "查找所有 feeds.conf.default 文件:"
+          find . -name "feeds.conf.default" -type f 2>/dev/null || echo "未找到 feeds.conf.default 文件"
 
+      - name: 🔧 复制配置文件到工作目录
+        run: |
+          echo "🔧 复制配置文件..."
+          
+          # 检查源文件是否存在
+          if [ ! -f "configs/.config" ]; then
+            echo "❌ 致命错误：下载的 .config 文件不存在"
+            echo "📋 尝试列出 configs 目录的所有内容："
+            ls -la configs/ || echo "configs/ 目录无法访问"
+            exit 1
+          fi
+          
+          if [ ! -f "configs/feeds.conf.default" ]; then
+            echo "❌ 致命错误：下载的 feeds.conf.default 文件不存在"
+            exit 1
+          fi
+          
+          # 备份可能存在的原文件
+          if [ -f ".config" ]; then
+            echo "⚠️ 发现现有 .config 文件，备份为 .config.original"
+            mv .config .config.original
+          fi
+          
+          if [ -f "feeds.conf.default" ]; then
+            echo "⚠️ 发现现有 feeds.conf.default 文件，备份为 feeds.conf.default.original"
+            mv feeds.conf.default feeds.conf.default.original
+          fi
+          
+          # 复制下载的配置文件
+          cp configs/.config ./
+          cp configs/feeds.conf.default ./
+          
+          echo "✅ 配置文件复制完成"
 
       - name: 🔧 验证配置文件
         run: |
