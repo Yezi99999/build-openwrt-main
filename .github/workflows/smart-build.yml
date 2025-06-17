@@ -89,6 +89,12 @@ jobs:
       - name: 🔧 初始化管理脚本
         run: |
           echo "🔧 初始化配置管理和插件数据库..."
+
+          # 创建工作目录
+          echo "📁 创建工作目录..."
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+          
           
           # 给脚本添加执行权限
           chmod +x script/*.sh
@@ -108,11 +114,7 @@ jobs:
           echo "🔧 初始化插件数据库..."
           ./script/plugin-manager.sh init
 
-           # 创建工作目录
-          echo "📁 创建工作目录..."
-          sudo mkdir -p /workdir
-          sudo chown $USER:$GROUPS /workdir
-          
+           
           echo "✅ 管理脚本初始化完成"
 
       - name: 🔧 解析编译配置
@@ -798,30 +800,3 @@ jobs:
             echo "❌ 编译失败"
             echo "💡 请检查编译日志查找错误原因"
           fi
-
-      - name: 📧 发送通知（可选）
-        if: env.NOTIFY_WEBHOOK != ''
-        run: |
-          # 如果配置了通知webhook，发送编译结果通知
-          status_icon="✅"
-          status_text="成功"
-          
-          if [[ "${{ needs.build.result }}" != "success" ]]; then
-            status_icon="❌"
-            status_text="失败"
-          fi
-          
-          curl -X POST ${{ env.NOTIFY_WEBHOOK }} \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"text\": \"${status_icon} OpenWrt编译${status_text}\",
-              \"attachments\": [{
-                \"color\": \"${{ needs.build.result == 'success' && 'good' || 'danger' }}\",
-                \"fields\": [
-                  {\"title\": \"源码分支\", \"value\": \"${{ needs.prepare.outputs.source_name }}\", \"short\": true},
-                  {\"title\": \"目标设备\", \"value\": \"${{ needs.prepare.outputs.device_name }}\", \"short\": true},
-                  {\"title\": \"编译状态\", \"value\": \"${status_text}\", \"short\": true},
-                  {\"title\": \"构建编号\", \"value\": \"#${{ github.run_number }}\", \"short\": true}
-                ]
-              }]
-            }" || echo "通知发送失败"
