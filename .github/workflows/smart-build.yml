@@ -498,16 +498,11 @@ jobs:
           sudo timedatectl set-timezone "$TZ"
 
       - name: 📥 下载源码
-        working-directory: /workdir
         run: |
           echo "📥 下载源码: ${{ needs.prepare.outputs.repo_url }}"
           echo "📥 分支: ${{ needs.prepare.outputs.repo_branch }}"
-          
           git clone ${{ needs.prepare.outputs.repo_url }} -b ${{ needs.prepare.outputs.repo_branch }} openwrt
-          
-          # 链接到当前目录
-          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-          
+
           cd openwrt
           echo "📋 源码信息:"
           echo "  提交ID: $(git rev-parse HEAD)"
