@@ -596,7 +596,7 @@ jobs:
         run: |
           cd openwrt
           echo "📋 生成最终配置..."
-          make defconfig
+          make defconfig FORCE=1
           
           echo "📋 配置差异对比:"
           ./scripts/diffconfig.sh || true
