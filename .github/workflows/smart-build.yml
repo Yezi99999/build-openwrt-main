@@ -455,9 +455,8 @@ jobs:
           chmod 644 .config feeds.conf.default
           
           echo "✅ 构建配置应用完成"
+
       - name: 🔧 初始化编译环境
-        env:
-          DEBIAN_FRONTEND: noninteractive
         run: |
             echo "🔧 更新软件包列表..."
             sudo -E apt-get -qq update
@@ -566,6 +565,12 @@ jobs:
               # 添加特定配置
               ;;
           esac
+
+          echo "🔍 检查依赖..."
+          make prereq V=s || { echo "❌ 依赖检查失败"; cat logs/prereq.log || true; exit 1; }
+
+          echo "📋 生成最终配置..."
+          make defconfig V=s || { echo "❌ defconfig 失败"; exit 1; }
           
           echo "✅ 第一阶段自定义脚本执行完成"
 
@@ -598,7 +603,7 @@ jobs:
         run: |
           cd openwrt
           echo "📋 生成最终配置..."
-          make defconfig
+          make defconfig FORCE=1
           
           echo "📋 配置差异对比:"
           ./scripts/diffconfig.sh || true
