@@ -322,6 +322,9 @@ jobs:
           ls -la .config
           echo "生成路径: $(realpath .config)"
 
+          cp .config config.defalut
+          chmod +x config.defalut
+
           # 设置输出
           echo "complete_config=.config" >> $GITHUB_OUTPUT
 
@@ -344,7 +347,7 @@ jobs:
         with:
           name: build-configs-${{ github.run_number }}  # 添加运行号确保唯一性
           path: |
-            .config
+            config.defalut
             feeds.conf.default
           if-no-files-found: error
 
@@ -381,6 +384,12 @@ jobs:
           else
             echo "❌ .config 不存在"
           fi
+
+          if [ -f "configs/config.defalut" ]; then
+            echo "✅ config.defalut 存在 ($(stat -c%s configs/config.defalut) 字节)"
+          else
+            echo "❌ config.defalut 不存在"
+          fi
           
           if [ -f "configs/feeds.conf.default" ]; then
             echo "✅ feeds.conf.default 存在 ($(stat -c%s configs/feeds.conf.default) 字节)"
@@ -402,8 +411,8 @@ jobs:
           echo "🔧 复制配置文件..."
           
           # 检查源文件是否存在
-          if [ ! -f "configs/.config" ]; then
-            echo "❌ 致命错误：下载的 .config 文件不存在"
+          if [ ! -f "configs/config.defalut" ]; then
+            echo "❌ 致命错误：下载的 config.defalut 文件不存在"
             echo "📋 尝试列出 configs 目录的所有内容："
             ls -la configs/ || echo "configs/ 目录无法访问"
             exit 1
@@ -426,8 +435,10 @@ jobs:
           fi
           
           # 复制下载的配置文件
-          cp configs/.config ./
+          cp configs/config.defalut ./.config
+          chmod +x ./.config
           cp configs/feeds.conf.default ./
+          chmod +x feeds.conf.default
           
           echo "✅ 配置文件复制完成"
 
