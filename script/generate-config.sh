@@ -140,10 +140,26 @@ CONFIG_TARGET_x86=y
 CONFIG_TARGET_x86_64=y
 CONFIG_TARGET_x86_64_DEVICE_generic=y
 
-# 固件格式
+# 引导配置
+CONFIG_GRUB_IMAGES=y
+CONFIG_GRUB_EFI_IMAGES=y
+CONFIG_VDI_IMAGES=y
+CONFIG_VMDK_IMAGES=y
+
+# 分区大小
+CONFIG_TARGET_KERNEL_PARTSIZE=32
+CONFIG_TARGET_ROOTFS_PARTSIZE=500
 CONFIG_TARGET_IMAGES_GZIP=y
-CONFIG_TARGET_KERNEL_PARTSIZE=64
-CONFIG_TARGET_ROOTFS_PARTSIZE=512
+
+# X86网卡驱动
+CONFIG_PACKAGE_kmod-e1000=y
+CONFIG_PACKAGE_kmod-e1000e=y
+CONFIG_PACKAGE_kmod-igb=y
+CONFIG_PACKAGE_kmod-igbvf=y
+CONFIG_PACKAGE_kmod-ixgbe=y
+CONFIG_PACKAGE_kmod-r8125=y
+CONFIG_PACKAGE_kmod-r8168=y
+CONFIG_PACKAGE_kmod-vmxnet3=y
 
 # EFI 支持
 CONFIG_GRUB_EFI_IMAGES=y
@@ -159,6 +175,14 @@ CONFIG_TARGET_ramips=y
 CONFIG_TARGET_ramips_mt7621=y
 CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-4a-gigabit=y
 
+# 图像压缩
+CONFIG_TARGET_IMAGES_GZIP=y
+
+# MT7621无线驱动
+CONFIG_PACKAGE_kmod-mt7603=y
+CONFIG_PACKAGE_kmod-mt76x2=y
+CONFIG_PACKAGE_wpad-basic-wolfssl=y
+
 EOF
             ;;
             
@@ -169,6 +193,15 @@ EOF
 CONFIG_TARGET_ramips=y
 CONFIG_TARGET_ramips_mt7621=y
 CONFIG_TARGET_ramips_mt7621_DEVICE_d-team_newifi-d2=y
+
+# 图像压缩
+CONFIG_TARGET_IMAGES_GZIP=y
+
+# MT7621无线和USB驱动
+CONFIG_PACKAGE_kmod-mt7603=y
+CONFIG_PACKAGE_kmod-mt76x2=y
+CONFIG_PACKAGE_kmod-usb3=y
+CONFIG_PACKAGE_wpad-basic-wolfssl=y
 
 EOF
             ;;
@@ -181,8 +214,16 @@ CONFIG_TARGET_bcm27xx=y
 CONFIG_TARGET_bcm27xx_bcm2711=y
 CONFIG_TARGET_bcm27xx_bcm2711_DEVICE_rpi-4=y
 
-# 固件格式
+# 分区大小
+CONFIG_TARGET_KERNEL_PARTSIZE=64
+CONFIG_TARGET_ROOTFS_PARTSIZE=2048
 CONFIG_TARGET_IMAGES_GZIP=y
+
+# 树莓派特定驱动
+CONFIG_PACKAGE_kmod-usb-net-asix=y
+CONFIG_PACKAGE_kmod-usb-net-rtl8152=y
+CONFIG_PACKAGE_bcm27xx-gpu-fw=y
+CONFIG_PACKAGE_bcm27xx-userland=y
 
 EOF
             ;;
@@ -195,6 +236,14 @@ CONFIG_TARGET_rockchip=y
 CONFIG_TARGET_rockchip_armv8=y
 CONFIG_TARGET_rockchip_armv8_DEVICE_friendlyarm_nanopi-r2s=y
 
+# 分区大小
+CONFIG_TARGET_KERNEL_PARTSIZE=32
+CONFIG_TARGET_ROOTFS_PARTSIZE=1024
+CONFIG_TARGET_IMAGES_GZIP=y
+
+# R2S特定驱动
+CONFIG_PACKAGE_kmod-usb-net-rtl8152=y
+
 EOF
             ;;
             
@@ -203,7 +252,8 @@ EOF
             cat << 'EOF'
 
 # ======================== 通用设备配置 ========================
-# 请手动指定正确的设备配置
+# 请根据实际设备修改目标配置
+CONFIG_TARGET_IMAGES_GZIP=y
 
 EOF
             ;;
@@ -213,8 +263,49 @@ EOF
 # 获取通用配置
 get_common_config() {
     cat << 'EOF'
+# ======================== 编译选项 ========================
 
-# ======================== 通用系统配置 ========================
+# 编译工具链
+CONFIG_MAKE_TOOLCHAIN=y
+CONFIG_IB=y
+CONFIG_SDK=y
+
+# 文件系统
+CONFIG_TARGET_ROOTFS_EXT4FS=y
+CONFIG_TARGET_ROOTFS_SQUASHFS=y
+
+# 构建设置
+CONFIG_SIGNED_PACKAGES=y
+CONFIG_SIGNATURE_CHECK=y
+CONFIG_BUILD_LOG=y
+
+# ======================== 内核配置 ========================
+
+# IPv6支持
+CONFIG_IPV6=y
+CONFIG_KERNEL_IPV6=y
+CONFIG_PACKAGE_ipv6helper=y
+
+# 文件系统支持
+CONFIG_PACKAGE_kmod-fs-ext4=y
+CONFIG_PACKAGE_kmod-fs-ntfs=y
+CONFIG_PACKAGE_kmod-fs-vfat=y
+CONFIG_PACKAGE_kmod-fs-exfat=y
+CONFIG_PACKAGE_ntfs-3g=y
+
+# USB支持
+CONFIG_PACKAGE_kmod-usb-core=y
+CONFIG_PACKAGE_kmod-usb2=y
+CONFIG_PACKAGE_kmod-usb3=y
+CONFIG_PACKAGE_kmod-usb-storage=y
+CONFIG_PACKAGE_kmod-usb-storage-extras=y
+CONFIG_PACKAGE_kmod-usb-storage-uas=y
+
+# 网络优化
+CONFIG_PACKAGE_kmod-tcp-bbr=y
+CONFIG_PACKAGE_kmod-tun=y
+
+# ======================== 基础软件包 ========================
 # LuCI Web界面
 CONFIG_PACKAGE_luci=y
 CONFIG_PACKAGE_luci-base=y
@@ -387,11 +478,51 @@ EOF
         "luci-app-aria2")
             cat << 'EOF'
 
-# ======================== Aria2 下载工具 ========================
+# ======================== Aria2 下载器 ========================
 CONFIG_PACKAGE_luci-app-aria2=y
 CONFIG_PACKAGE_luci-i18n-aria2-zh-cn=y
 CONFIG_PACKAGE_aria2=y
 CONFIG_PACKAGE_ariang=y
+EOF
+            ;;
+            
+        "luci-app-adbyby-plus")
+            cat << 'EOF'
+
+# ======================== ADByby Plus+ 广告过滤 ========================
+CONFIG_PACKAGE_luci-app-adbyby-plus=y
+CONFIG_PACKAGE_luci-i18n-adbyby-plus-zh-cn=y
+CONFIG_PACKAGE_adbyby=y
+EOF
+            ;;
+            
+        "luci-app-adguardhome")
+            cat << 'EOF'
+
+# ======================== AdGuard Home ========================
+CONFIG_PACKAGE_luci-app-adguardhome=y
+CONFIG_PACKAGE_luci-i18n-adguardhome-zh-cn=y
+CONFIG_PACKAGE_adguardhome=y
+EOF
+            ;;
+            
+        "luci-app-wol")
+            cat << 'EOF'
+
+# ======================== 网络唤醒 ========================
+CONFIG_PACKAGE_luci-app-wol=y
+CONFIG_PACKAGE_luci-i18n-wol-zh-cn=y
+CONFIG_PACKAGE_etherwake=y
+EOF
+            ;;
+            
+        *)
+            log_warning "未知插件: $plugin，生成基本配置"
+            echo ""
+            echo "# 未知插件配置: $plugin"
+            echo "CONFIG_PACKAGE_${plugin}=y"
+            
+            cat << 'EOF'
 
 EOF
             ;;
@@ -465,26 +596,31 @@ apply_auto_fixes() {
     local auto_fix="$2"
     
     if [ "$auto_fix" != true ]; then
+        log_debug "自动修复功能未启用"
         return 0
     fi
     
-    log_info "应用自动修复..."
+    log_info "开始应用自动修复..."
     
-    # 生成feeds配置
-    generate_feeds_conf "$auto_fix"
+    # 确保修复脚本存在且可执行
+    local main_fix_script="$FIXES_DIR/fix-build-issues.sh"
     
-    # 设备特定修复
-    case "$device" in
-        "x86_64")
-            log_debug "应用X86_64特定修复"
-            # 可以添加设备特定的修复逻辑
-            ;;
-        "rpi_4b")
-            log_debug "应用树莓派4B特定修复"
-            ;;
-    esac
+    if [ ! -f "$main_fix_script" ]; then
+        log_warning "主修复脚本不存在: $main_fix_script"
+        return 1
+    fi
     
-    log_success "自动修复应用完成"
+    chmod +x "$main_fix_script"
+    
+    # 执行自动修复
+    log_info "执行设备特定修复: $device"
+    if "$main_fix_script" "$device" "auto"; then
+        log_success "自动修复完成"
+        return 0
+    else
+        log_warning "自动修复执行时遇到问题，但继续处理"
+        return 0
+    fi
 }
 
 # 验证配置内容
@@ -507,6 +643,20 @@ validate_config_content() {
     if ! echo "$config_content" | grep -q "CONFIG_PACKAGE_base-files=y"; then
         issues+=("缺少核心基础包")
     fi
+
+     # 设备特定验证
+    case "$device" in
+        "x86_64")
+            if ! echo "$config_content" | grep -q "CONFIG_TARGET_x86_64=y"; then
+                issues+=("X86_64配置不正确")
+            fi
+            ;;
+        "rpi_4b")
+            if ! echo "$config_content" | grep -q "CONFIG_TARGET_bcm27xx=y"; then
+                issues+=("树莓派配置不正确")
+            fi
+            ;;
+    esac
     
     if [ ${#issues[@]} -gt 0 ]; then
         log_warning "配置验证发现问题:"
