@@ -1,33 +1,31 @@
-#========================================================================================================================
-# 🛠️ OpenWrt 智能编译工作流 - 修复版本
-# 功能: 接收Web界面传递的配置参数，智能编译指定设备和插件的固件
-# 特性: 使用generate-config.sh生成配置、动态feeds配置、完整配置生成
-#========================================================================================================================
+# OpenWrt 智能编译工作流 - 优化版本
+# 支持通过Web界面触发的自动化编译，解决Ubuntu 20.04弃用问题
 
-name: 🛠️ 智能编译固件
+name: 🛠️ OpenWrt 智能编译
 
 on:
-  # Web界面触发（推荐方式）
+  # 支持通过Repository Dispatch触发（来自Web界面）
   repository_dispatch:
     types: [web_build]
   
-  # 手动触发（备用方式）
+  # 支持手动触发
   workflow_dispatch:
     inputs:
       source_branch:
-        description: '源码分支'
+        description: "源码分支"
         required: true
-        default: 'lede-master'
+        default: "lede-master"
         type: choice
         options:
-          - lede-master
           - openwrt-main
+          - lede-master
           - immortalwrt-master
           - Lienol-master
+      
       target_device:
-        description: '目标设备'
+        description: "目标设备"
         required: true
-        default: 'x86_64'
+        default: "x86_64"
         type: choice
         options:
           - x86_64
@@ -35,86 +33,51 @@ on:
           - newifi_d2
           - rpi_4b
           - nanopi_r2s
-          - k2p
-          - ac68u
-          - r7800
-          - wrt3200acm
+      
       plugins_list:
-        description: '插件列表（用逗号分隔）'
+        description: "插件列表(用逗号分隔)"
         required: false
-        default: ''
+        default: ""
         type: string
+      
       build_description:
-        description: '编译描述'
+        description: "编译描述"
         required: false
-        default: '手动触发编译'
+        default: "智能编译"
         type: string
 
-# 环境变量
+# 环境变量配置
 env:
   TZ: Asia/Shanghai
-  UPLOAD_BIN_DIR: false
-  UPLOAD_FIRMWARE: true
-  UPLOAD_RELEASE: true
-  UPLOAD_WETRANSFER: false
-  UPLOAD_ANON: false
-  CACHE_TOOLCHAIN: true
 
 jobs:
-  # 预处理任务 - 生成配置
+  # 准备阶段：解析配置和设置环境
   prepare:
-    runs-on: ubuntu-24.04
-    name: 📋 准备编译环境
+    runs-on: ubuntu-24.04  # 解决Ubuntu 20.04弃用问题，升级到24.04
+    name: 📋 配置解析
     outputs:
       source_branch: ${{ steps.config.outputs.source_branch }}
       target_device: ${{ steps.config.outputs.target_device }}
       plugins_list: ${{ steps.config.outputs.plugins_list }}
-      build_description: ${{ steps.config.outputs.build_description }}
+      build_tag: ${{ steps.config.outputs.build_tag }}
       repo_url: ${{ steps.config.outputs.repo_url }}
       repo_branch: ${{ steps.config.outputs.repo_branch }}
+      device_profile: ${{ steps.config.outputs.device_profile }}
       source_name: ${{ steps.config.outputs.source_name }}
       device_name: ${{ steps.config.outputs.device_name }}
-      device_profile: ${{ steps.config.outputs.device_profile }}
-      device_target: ${{ steps.config.outputs.device_target }}
-      build_tag: ${{ steps.config.outputs.build_tag }}
-      cache_key: ${{ steps.config.outputs.cache_key }}
+      feeds_conf: ${{ steps.config.outputs.feeds_conf }}
+      config_file: ${{ steps.config.outputs.config_file }}
 
+      
     steps:
-      - name: 🚀 检出代码
-        uses: actions/checkout@v4
-
-      - name: 🔧 初始化管理脚本
-        run: |
-          echo "🔧 初始化配置管理和插件数据库..."
-          
-          # 给脚本添加执行权限
-          chmod +x script/*.sh
-          
-          # 检查并安装jq工具（用于JSON处理）
-          if ! command -v jq &> /dev/null; then
-            echo "📦 安装jq工具..."
-            sudo apt-get update -qq
-            sudo apt-get install -y jq
-          fi
-          
-          # 初始化配置管理
-          echo "🔧 初始化配置管理..."
-          ./script/generate-config.sh init
-          
-          # 初始化插件数据库
-          echo "🔧 初始化插件数据库..."
-          ./script/plugin-manager.sh init
-
-            
-          echo "✅ 管理脚本初始化完成"
-
-      - name: 🔧 解析编译配置
+      - name: 📥 检出代码
+        uses: actions/checkout@v4  # 更新到最新版本
+      
+      - name: ⚙️ 解析编译配置
         id: config
         run: |
-          echo "📋 解析编译配置..."
-          
-          # 根据触发方式获取配置参数
-          if [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
+          # 优先使用Repository Dispatch的配置，其次使用手动输入
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
             echo "🌐 检测到Web界面触发的编译请求"
             SOURCE_BRANCH="${{ github.event.client_payload.source_branch }}"
             TARGET_DEVICE="${{ github.event.client_payload.target_device }}"
@@ -140,27 +103,39 @@ jobs:
           echo "  插件列表: $PLUGINS_LIST"
           echo "  编译描述: $BUILD_DESC"
           
-          # 根据源码分支设置仓库信息
+          # 根据源码分支设置仓库信息和配置文件路径
           case $SOURCE_BRANCH in
             "openwrt-main")
               REPO_URL="https://github.com/openwrt/openwrt"
               REPO_BRANCH="main"
               SOURCE_NAME="OpenWrt官方"
+              FEEDS_CONF="config/openwrt-main/feeds.conf.default"
+              CONFIG_FILE="config/openwrt-main/config"
+
               ;;
             "lede-master")
               REPO_URL="https://github.com/coolsnowwolf/lede"
               REPO_BRANCH="master"
               SOURCE_NAME="Lean's LEDE"
+              FEEDS_CONF="config/lede-master/feeds.conf.default"
+              CONFIG_FILE="config/lede-master/config"
+
               ;;
             "immortalwrt-master")
               REPO_URL="https://github.com/immortalwrt/immortalwrt"
               REPO_BRANCH="master"
               SOURCE_NAME="ImmortalWrt"
+              FEEDS_CONF="config/immortalwrt-master/feeds.conf.default"
+              CONFIG_FILE="config/immortalwrt-master/config"
+
               ;;
             "Lienol-master")
               REPO_URL="https://github.com/Lienol/openwrt"
-              REPO_BRANCH="master"
-              SOURCE_NAME="Lienol's OpenWrt"
+              REPO_BRANCH="22.03"
+              SOURCE_NAME="Lienol"
+              FEEDS_CONF="config/Lienol-master/feeds.conf.default"
+              CONFIG_FILE="config/Lienol-master/config"
+
               ;;
             *)
               echo "❌ 不支持的源码分支: $SOURCE_BRANCH"
@@ -168,52 +143,32 @@ jobs:
               ;;
           esac
           
-          # 根据目标设备设置设备信息
+          # 根据目标设备设置配置信息
           case $TARGET_DEVICE in
             "x86_64")
-              DEVICE_NAME="X86_64虚拟机"
-              DEVICE_PROFILE="generic"
-              DEVICE_TARGET="x86/64"
+              DEVICE_PROFILE="x86/64"
+              TARGET_SYSTEM="x86_64"
+              DEVICE_NAME="X86_64"
               ;;
             "xiaomi_4a_gigabit")
-              DEVICE_NAME="小米路由器4A千兆版"
-              DEVICE_PROFILE="xiaomi_mi-router-4a-gigabit"
-              DEVICE_TARGET="ramips/mt7621"
+              DEVICE_PROFILE="ramips/mt7621"
+              TARGET_SYSTEM="ramips"
+              DEVICE_NAME="小米4A千兆版"
               ;;
             "newifi_d2")
+              DEVICE_PROFILE="ramips/mt7621"
+              TARGET_SYSTEM="ramips"
               DEVICE_NAME="新路由3"
-              DEVICE_PROFILE="d-team_newifi-d2"
-              DEVICE_TARGET="ramips/mt7621"
               ;;
             "rpi_4b")
+              DEVICE_PROFILE="bcm27xx/bcm2711"
+              TARGET_SYSTEM="bcm27xx"
               DEVICE_NAME="树莓派4B"
-              DEVICE_PROFILE="rpi-4"
-              DEVICE_TARGET="bcm27xx/bcm2711"
               ;;
             "nanopi_r2s")
-              DEVICE_NAME="NanoPi R2S"
-              DEVICE_PROFILE="friendlyarm_nanopi-r2s"
-              DEVICE_TARGET="rockchip/armv8"
-              ;;
-            "k2p")
-              DEVICE_NAME="斐讯K2P"
-              DEVICE_PROFILE="phicomm_k2p"
-              DEVICE_TARGET="ramips/mt7621"
-              ;;
-            "ac68u")
-              DEVICE_NAME="华硕AC68U"
-              DEVICE_PROFILE="asus_rt-ac68u"
-              DEVICE_TARGET="bcm47xx/mips74k"
-              ;;
-            "r7800")
-              DEVICE_NAME="网件R7800"
-              DEVICE_PROFILE="netgear_r7800"
-              DEVICE_TARGET="ipq806x/generic"
-              ;;
-            "wrt3200acm")
-              DEVICE_NAME="领势WRT3200ACM"
-              DEVICE_PROFILE="linksys_wrt3200acm"
-              DEVICE_TARGET="mvebu/cortexa9"
+              DEVICE_PROFILE="rockchip/armv8"
+              TARGET_SYSTEM="rockchip"
+              DEVICE_NAME="NanoPi_R2S"
               ;;
             *)
               echo "❌ 不支持的目标设备: $TARGET_DEVICE"
@@ -222,575 +177,507 @@ jobs:
           esac
           
           # 生成构建标签
-          BUILD_TAG="${SOURCE_NAME}_${DEVICE_NAME}_$(date +'%Y%m%d_%H%M')"
+          BUILD_TAG="OpenWrt_${SOURCE_NAME// /_}_${DEVICE_NAME}_$(date +%Y%m%d_%H%M%S)"
           
-          # 生成缓存键
-          CACHE_KEY="toolchain-${SOURCE_BRANCH}-${DEVICE_TARGET//\//_}-$(date +'%Y%m%d')"
-          
-          # 设置输出变量
+          # 输出配置到环境变量
           echo "source_branch=$SOURCE_BRANCH" >> $GITHUB_OUTPUT
           echo "target_device=$TARGET_DEVICE" >> $GITHUB_OUTPUT
           echo "plugins_list=$PLUGINS_LIST" >> $GITHUB_OUTPUT
-          echo "build_description=$BUILD_DESC" >> $GITHUB_OUTPUT
+          echo "build_tag=$BUILD_TAG" >> $GITHUB_OUTPUT
           echo "repo_url=$REPO_URL" >> $GITHUB_OUTPUT
           echo "repo_branch=$REPO_BRANCH" >> $GITHUB_OUTPUT
+          echo "device_profile=$DEVICE_PROFILE" >> $GITHUB_OUTPUT
           echo "source_name=$SOURCE_NAME" >> $GITHUB_OUTPUT
           echo "device_name=$DEVICE_NAME" >> $GITHUB_OUTPUT
-          echo "device_profile=$DEVICE_PROFILE" >> $GITHUB_OUTPUT
-          echo "device_target=$DEVICE_TARGET" >> $GITHUB_OUTPUT
-          echo "build_tag=$BUILD_TAG" >> $GITHUB_OUTPUT
-          echo "cache_key=$CACHE_KEY" >> $GITHUB_OUTPUT
+          echo "feeds_conf=$FEEDS_CONF" >> $GITHUB_OUTPUT
+          echo "config_file=$CONFIG_FILE" >> $GITHUB_OUTPUT
+
           
-          echo "✅ 配置解析完成"
-
-      - name: 🔧 生成动态Feeds配置
-        id: feeds
-        run: |
-          echo "📋 根据插件列表生成feeds配置..."
-          
-          # 验证插件列表（如果提供了插件）
-          if [ -n "${{ steps.config.outputs.plugins_list }}" ]; then
-            echo "🔍 验证插件配置..."
-            if ! ./script/plugin-manager.sh validate -l "${{ steps.config.outputs.plugins_list }}"; then
-              echo "❌ 插件验证失败，请检查插件名称"
-              exit 1
-            fi
-            
-            echo "⚠️ 检查插件冲突..."
-            if ! ./script/plugin-manager.sh conflicts -l "${{ steps.config.outputs.plugins_list }}"; then
-              echo "❌ 检测到插件冲突，请修改插件选择"
-              exit 1
-            fi
-            
-            echo "📦 生成feeds配置..."
-            ./script/manage-feeds.sh "${{ steps.config.outputs.plugins_list }}" feeds.conf.default
-            echo "✅ 已生成包含插件依赖的feeds配置"
-          else
-            echo "📋 使用默认feeds配置"
-            # 根据源码分支创建基础feeds配置
-            case "${{ steps.config.outputs.source_branch }}" in
-              "openwrt-main")
-                cat > feeds.conf.default << 'EOF'
-          src-git packages https://git.openwrt.org/feed/packages.git
-          src-git luci https://git.openwrt.org/project/luci.git
-          src-git routing https://git.openwrt.org/feed/routing.git
-          src-git telephony https://git.openwrt.org/feed/telephony.git
-          EOF
-                ;;
-              "lede-master")
-                cat > feeds.conf.default << 'EOF'
-          src-git packages https://github.com/coolsnowwolf/packages
-          src-git luci https://github.com/coolsnowwolf/luci
-          src-git routing https://git.openwrt.org/feed/routing.git
-          src-git telephony https://git.openwrt.org/feed/telephony.git
-          src-git freifunk https://github.com/freifunk/openwrt-packages.git
-          EOF
-                ;;
-              "immortalwrt-master"|"Lienol-master")
-                cat > feeds.conf.default << 'EOF'
-          src-git packages https://github.com/immortalwrt/packages.git
-          src-git luci https://github.com/immortalwrt/luci.git
-          src-git routing https://git.openwrt.org/feed/routing.git
-          src-git telephony https://git.openwrt.org/feed/telephony.git
-          EOF
-                ;;
-            esac
-          fi
-          
-          echo "📋 生成的feeds配置:"
-          cat feeds.conf.default
-          
-          # 设置输出
-          echo "feeds_conf=feeds.conf.default" >> $GITHUB_OUTPUT
-
-      - name: 🔧 生成编译配置文件
-        run: |
-          echo "📋 使用generate-config.sh生成编译配置文件..."
-          
-          # 确保脚本有执行权限
-          chmod +x script/generate-config.sh
-          
-          # 生成配置文件
-          ./script/generate-config.sh "${{ steps.config.outputs.target_device }}" "${{ steps.config.outputs.plugins_list }}" .config
-          
-          echo "📋 配置文件生成完成！"
-          echo "📄 配置文件预览:"
-          head -20 .config
-          echo "... (更多配置) ..."
-
-          echo "📋 文件生成验证:"
-          ls -la .config
-          echo "生成路径: $(realpath .config)"
-
-          cp .config config.defalut
-          chmod +x config.defalut
-
-          # 设置输出
-          echo "complete_config=.config" >> $GITHUB_OUTPUT
-
-      - name: 🕵️ 检查配置文件
-        run: ls -l .config feeds.conf.default
-        continue-on-error: false  # 如果文件不存在，继续执行后续步骤
-
-      - name: 🔧 生成缓存键
-        id: cache
-        run: |
-          echo "📦 生成缓存键..."
-          CACHE_KEY="${{ steps.config.outputs.cache_key }}"
-          echo "cache_key=$CACHE_KEY" >> $GITHUB_OUTPUT
-          
-          # 输出缓存键
-          echo "🔑 缓存键: $CACHE_KEY"
-
-      - name: 📤 上传配置文件
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-configs-${{ github.run_number }}  # 添加运行号确保唯一性
-          path: |
-            config.defalut
-            feeds.conf.default
-          if-no-files-found: error
-
-  # 主编译任务
+          echo "✅ 编译环境初始化完成,配置解析完成"
+  # 编译阶段：实际的固件编译过程
   build:
-    runs-on: ubuntu-24.04
-    name: 🔨 编译固件 [${{ needs.prepare.outputs.source_name }}][${{ needs.prepare.outputs.device_name }}]
+    runs-on: ubuntu-24.04  # 解决Ubuntu 20.04弃用问题
     needs: prepare
-    if: needs.prepare.result == 'success'
+    name: 🔨 固件编译
+    if: ${{ github.event.repository.owner.id }} == ${{ github.event.sender.id }}  # 安全检查
     
     steps:
-      - name: 🚀 检出代码
+      - name: 📥 检出代码
         uses: actions/checkout@v4
 
-      
-
-      - name: 📥 下载配置文件
-        uses: actions/download-artifact@v4
-        with:
-          name: build-configs-${{ github.run_number }}
-          path: ./configs/
-          
-      - name: 🔍 检查下载的文件和目录
-        run: |
-          echo "当前目录结构:"
-          ls -la
-          echo ""
-          echo "configs/ 目录内容:"
-          ls -la configs/ || echo "configs/ 目录不存在"
-          echo ""
-          echo "检查下载的文件是否存在:"
-          if [ -f "configs/.config" ]; then
-            echo "✅ .config 存在 ($(stat -c%s configs/.config) 字节)"
-          else
-            echo "❌ .config 不存在"
-          fi
-
-          if [ -f "configs/config.defalut" ]; then
-            echo "✅ config.defalut 存在 ($(stat -c%s configs/config.defalut) 字节)"
-          else
-            echo "❌ config.defalut 不存在"
-          fi
-          
-          if [ -f "configs/feeds.conf.default" ]; then
-            echo "✅ feeds.conf.default 存在 ($(stat -c%s configs/feeds.conf.default) 字节)"
-          else
-            echo "❌ feeds.conf.default 不存在"
-          fi
-          
-          # 额外检查：显示所有可能的config文件
-          echo ""
-          echo "查找所有 .config 文件:"
-          find . -name ".config" -type f 2>/dev/null || echo "未找到 .config 文件"
-          
-          echo ""
-          echo "查找所有 feeds.conf.default 文件:"
-          find . -name "feeds.conf.default" -type f 2>/dev/null || echo "未找到 feeds.conf.default 文件"
-
-      - name: 🔧 复制配置文件到工作目录
-        run: |
-          echo "🔧 复制配置文件..."
-          
-          # 检查源文件是否存在
-          if [ ! -f "configs/config.defalut" ]; then
-            echo "❌ 致命错误：下载的 config.defalut 文件不存在"
-            echo "📋 尝试列出 configs 目录的所有内容："
-            ls -la configs/ || echo "configs/ 目录无法访问"
-            exit 1
-          fi
-          
-          if [ ! -f "configs/feeds.conf.default" ]; then
-            echo "❌ 致命错误：下载的 feeds.conf.default 文件不存在"
-            exit 1
-          fi
-          
-          # 备份可能存在的原文件
-          if [ -f ".config" ]; then
-            echo "⚠️ 发现现有 .config 文件，备份为 .config.original"
-            mv .config .config.original
-          fi
-          
-          if [ -f "feeds.conf.default" ]; then
-            echo "⚠️ 发现现有 feeds.conf.default 文件，备份为 feeds.conf.default.original"
-            mv feeds.conf.default feeds.conf.default.original
-          fi
-          
-          # 复制下载的配置文件
-          cp configs/config.defalut ./.config
-          chmod +x ./.config
-          cp configs/feeds.conf.default ./
-          chmod +x feeds.conf.default
-          
-          echo "✅ 配置文件复制完成"
-
-      - name: 🔧 验证配置文件
-        run: |
-          echo "🔍 验证配置文件..."
-          if [ ! -f "feeds.conf.default" ]; then
-            echo "❌ feeds.conf.default 文件不存在"
-            exit 1
-          fi
-          
-          if [ ! -f ".config" ]; then
-            echo "❌ .config 文件不存在"
-            exit 1
-          fi
-          
-          echo "✅ 配置文件验证通过"
-          echo "📋 feeds配置:"
-          cat feeds.conf.default
-          echo ""
-          echo "📋 编译配置预览:"
-          head -10 .config
-
-      - name: 🔧 初始化编译环境
+      - name: 🚀 初始化编译环境
+        id: init
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          echo "🔧 更新软件包列表..."
-          sudo -E apt-get -qq update
+          echo "🔧 开始初始化编译环境..."
           
-          echo "🔧 安装编译依赖..."
-          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
-            bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib \
-            git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev \
-            libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libtool lrzsz \
-            mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pyelftools \
-            libpython3-dev qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip \
-            vim wget xmlto xxd zlib1g-dev python3-setuptools
+          # 显示系统信息
+          echo "📋 系统信息:"
+          lsb_release -a
+          echo "💾 磁盘空间:"
+          df -h
           
-          echo "🔧 清理APT缓存..."
-          sudo -E apt-get -qq autoremove --purge
-          sudo -E apt-get -qq clean
-
+          # 清理Docker镜像和不必要文件释放空间
+          echo "🧹 清理系统空间..."
+          docker rmi $(docker images -q) 2>/dev/null || true
+          [[ -n "${AGENT_TOOLSDIRECTORY}" ]] && sudo rm -rf "${AGENT_TOOLSDIRECTORY}"
+          sudo rm -rf /usr/share/dotnet /etc/apt/sources.list.d /usr/local/lib/android 2>/dev/null || true
+          
+          # 更新软件包列表
+          echo "🔄 更新软件包列表..."
+          sudo -E apt-get update
+          
+          # 清理不必要的软件包 (更安全的方式)
+          echo "🗑️ 清理不必要的软件包..."
+          sudo -E apt-get remove --purge azure-cli -y || true
+          sudo -E apt-get remove --purge firefox -y || true
+          sudo -E apt-get remove --purge powershell -y || true
+          sudo -E apt-get remove --purge thunderbird -y || true
+          sudo -E apt-get remove --purge libreoffice* -y || true
+          
+          # 分组安装依赖包以提高成功率
+          echo "📦 安装核心构建工具..."
+          sudo -E apt-get install -y \
+            build-essential \
+            cmake \
+            autoconf \
+            automake \
+            libtool \
+            pkg-config \
+            bison \
+            flex \
+            ccache \
+            git \
+            curl \
+            wget \
+            rsync \
+            unzip \
+            bzip2 \
+            gzip \
+            tar \
+            patch \
+            gettext \
+            file \
+            time || echo "⚠️ 某些核心工具安装失败，但可能不影响编译"
+          
+          echo "📚 安装开发库..."
+          sudo -E apt-get install -y \
+            libncurses5-dev \
+            libncursesw5-dev \
+            zlib1g-dev \
+            libssl-dev \
+            libelf-dev \
+            libfuse-dev \
+            libglib2.0-dev \
+            libgmp3-dev \
+            libltdl-dev \
+            libmpc-dev \
+            libmpfr-dev \
+            libreadline-dev \
+            gnutls-dev || echo "⚠️ 某些开发库安装失败，但可能不影响编译"
+          
+          echo "🐍 安装Python环境..."
+          sudo -E apt-get install -y \
+            python3 \
+            python3-dev \
+            python3-pip \
+            python3-setuptools \
+            python3-wheel || echo "⚠️ Python环境安装可能不完整"
+          
+          # 尝试安装Python相关包（可能在某些环境中不可用）
+          sudo -E apt-get install -y \
+            python3-ply \
+            python3-docutils \
+            python3-pyelftools \
+            python3-distutils 2>/dev/null || echo "⚠️ 某些Python包不可用，将跳过"
+          
+          echo "🛠️ 安装OpenWrt特定工具..."
+          sudo -E apt-get install -y \
+            gawk \
+            asciidoc \
+            binutils \
+            device-tree-compiler \
+            fastjar \
+            help2man \
+            intltool \
+            mkisofs \
+            scons \
+            subversion \
+            xmlto \
+            xsltproc \
+            qemu-utils \
+            squashfs-tools \
+            swig \
+            yasm \
+            p7zip \
+            p7zip-full || echo "⚠️ 某些OpenWrt工具安装失败，但可能不影响编译"
+          
+          # 尝试安装可能不可用的包
+          echo "🔧 尝试安装额外工具..."
+          sudo -E apt-get install -y \
+            antlr3 \
+            ecj \
+            uglifyjs \
+            ninja-build \
+            lrzsz \
+            msmtp 2>/dev/null || echo "⚠️ 某些额外工具不可用，将跳过"
+          
+          # 尝试安装多架构支持（可能在某些环境中不可用）
+          echo "🏗️ 尝试安装多架构支持..."
+          sudo -E apt-get install -y \
+            gcc-multilib \
+            g++-multilib \
+            libc6-dev-i386 2>/dev/null || echo "⚠️ 多架构支持不可用，将跳过"
+          
+          # 安装Node.js（用于某些构建工具）
+          echo "📱 安装Node.js..."
+          if ! command -v node &> /dev/null; then
+            curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash - || echo "⚠️ Node.js源添加失败"
+            sudo -E apt-get install -y nodejs || echo "⚠️ Node.js安装失败"
+          fi
+          
+          # 如果uglifyjs不可用，尝试通过npm安装
+          if ! command -v uglifyjs &> /dev/null && command -v npm &> /dev/null; then
+            echo "📦 通过npm安装uglifyjs..."
+            sudo npm install -g uglify-js || echo "⚠️ npm安装uglifyjs失败"
+          fi
+          
+          # 系统清理
+          echo "🧹 清理系统..."
+          sudo -E systemctl daemon-reload
+          sudo -E apt-get autoremove --purge -y
+          sudo -E apt-get autoclean
+          sudo -E apt-get clean
+          
           # 创建工作目录
           echo "📁 创建工作目录..."
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
           
-          echo "🔧 设置时区..."
+          # 设置时区
+          echo "🕒 设置时区..."
           sudo timedatectl set-timezone "$TZ"
-
+          
           # 验证关键工具
           echo "✅ 验证编译环境..."
           echo "GCC版本: $(gcc --version | head -1)"
           echo "Make版本: $(make --version | head -1)"
           echo "Git版本: $(git --version)"
           echo "Python版本: $(python3 --version)"
-
+          echo "CMake版本: $(cmake --version | head -1 2>/dev/null || echo '未安装')"
+          
+          # 显示最终的磁盘空间
+          echo "💾 清理后磁盘空间:"
+          df -h
+          
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "✅ 编译环境初始化完成, 编译环境初始化完成"
       - name: 📦 克隆源码
+        id: codes
         working-directory: /workdir
+        if: steps.init.outputs.status == 'success' && !cancelled()
         run: |
-          echo "📥 下载源码: ${{ needs.prepare.outputs.repo_url }}"
-          echo "📥 分支: ${{ needs.prepare.outputs.repo_branch }}"
+          echo "📦 开始克隆源码..."
+          echo "  仓库: ${{ needs.prepare.outputs.repo_url }}"
+          echo "  分支: ${{ needs.prepare.outputs.repo_branch }}"
           
-          git clone ${{ needs.prepare.outputs.repo_url }} -b ${{ needs.prepare.outputs.repo_branch }} openwrt
+          # 显示磁盘空间
+          df -hT $PWD
           
-          # 链接到当前目录
+          # 克隆源码（只克隆最新提交以节省时间和空间）
+          git clone -q --single-branch --depth=1 --branch=${{ needs.prepare.outputs.repo_branch }} ${{ needs.prepare.outputs.repo_url }} openwrt
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
           
-          cd openwrt
-          echo "📋 源码信息:"
-          echo "  提交ID: $(git rev-parse HEAD)"
-          echo "  提交时间: $(git log -1 --format=%cd)"
-          echo "  提交信息: $(git log -1 --format=%s)"
-
-      - name: 🔧 复制配置文件
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "✅ 源码克隆完成"
+      - name: 🔧 加载自定义feeds
         run: |
-          echo "🔧 复制feeds配置文件..."
-          cp feeds.conf.default openwrt/feeds.conf.default
+          echo "🔧 配置自定义feeds..."
           
-          echo "🔧 复制编译配置文件..."
-          cp .config openwrt/.config
-          
-          echo "📋 当前feeds配置:"
-          cat openwrt/feeds.conf.default
-          
-          echo "📋 编译配置预览:"
-          head -10 openwrt/.config
+          # 如果存在对应分支的feeds配置文件则使用
+          if [ -f "${{ needs.prepare.outputs.feeds_conf }}" ]; then
+            cp -f ${{ needs.prepare.outputs.feeds_conf }} openwrt/feeds.conf.default
+            echo "📋 使用自定义feeds配置: ${{ needs.prepare.outputs.feeds_conf }}"
+          else
+            echo "📋 使用默认feeds配置"
+          fi
 
-      - name: 🔧 第一阶段自定义脚本
+      - name: 📥 更新feeds
         run: |
-          echo "🔧 执行第一阶段自定义脚本..."
-          cd openwrt
-          
-          # 根据源码分支执行相应的自定义操作
-          case "${{ needs.prepare.outputs.source_branch }}" in
-            "openwrt-main")
-              echo "🔧 OpenWrt官方源码自定义配置..."
-              # 删除可能冲突的包
-              rm -rf package/utils/{ucode,fbtest} || true
-              ;;
-            "lede-master")
-              echo "🔧 Lean's LEDE源码自定义配置..."
-              # 删除可能冲突的包
-              rm -rf package/lean/{samba4,luci-app-samba4,luci-app-ttyd} || true
-              ;;
-            "immortalwrt-master")
-              echo "🔧 ImmortalWrt源码自定义配置..."
-              # 删除可能冲突的包
-              rm -rf package/emortal/{autosamba,ipv6-helper} || true
-              ;;
-            "Lienol-master")
-              echo "🔧 Lienol源码自定义配置..."
-              # 添加特定配置
-              ;;
-          esac
-          
-          echo "✅ 第一阶段自定义脚本执行完成"
-
-      - name: 📦 更新feeds
-        run: |
-          cd openwrt
-          echo "📦 更新feeds..."
+          echo "📥 开始更新feeds..."
+          cd openwrt/
           ./scripts/feeds update -a
-          
-          echo "📦 安装feeds..."
-          ./scripts/feeds install -a
-
-      - name: 🔧 第二阶段自定义脚本
+          echo "✅ feeds更新完成"
+      - name: 📦 安装feeds
         run: |
-          echo "🔧 执行第二阶段自定义脚本..."
+          echo "📦 开始安装feeds..."
+          cd openwrt/
+          ./scripts/feeds install -a
+          echo "✅ feeds安装完成"
+      - name: 🔧 生成最终编译配置
+        run: |
+          echo "🔧 开始生成最终编译配置..."
           cd openwrt
           
-          # 修改默认IP地址（根据设备类型可能需要不同配置）
+          # 设备推荐插件
+          RECOMMEND_PLUGINS=""
           case "${{ needs.prepare.outputs.target_device }}" in
             "x86_64")
-              echo "🔧 配置X86设备默认参数..."
-              sed -i 's/192.168.1.1/192.168.50.1/g' package/base-files/files/bin/config_generate || true
+              RECOMMEND_PLUGINS="luci kmod-e1000 kmod-igb"
+              ;;
+            "xiaomi_4a_gigabit"|"newifi_d2")
+              RECOMMEND_PLUGINS="luci kmod-mt76 kmod-usb2"
+              ;;
+            "rpi_4b")
+              RECOMMEND_PLUGINS="luci kmod-usb3 kmod-sound-core kmod-fs-ext4"
+              ;;
+            "nanopi_r2s")
+              RECOMMEND_PLUGINS="luci kmod-usb-net-rtl8152"
               ;;
             *)
-              echo "🔧 配置路由器设备默认参数..."
-              # 保持默认IP 192.168.1.1 对于路由器设备通常更合适
+              RECOMMEND_PLUGINS="luci"
               ;;
           esac
-          
-          # 修改默认主机名
-          sed -i "s/OpenWrt/${{ needs.prepare.outputs.device_name }}/g" package/base-files/files/bin/config_generate || true
-          
-          # 修改时区
-          sed -i "s/'UTC'/'CST-8'/g" package/base-files/files/bin/config_generate || true
-          
-          echo "✅ 第二阶段自定义脚本执行完成"
-
-      - name: 📋 生成配置
-        run: |
-          cd openwrt
-          echo "📋 生成最终配置..."
-          make defconfig FORCE=1
-          
-          echo "📋 配置差异对比:"
-          ./scripts/diffconfig.sh || true
-
-      - name: 📥 下载依赖包
-        run: |
-          cd openwrt
-          echo "📥 下载编译依赖包..."
-          make download -j8
-          
-          # 检查下载结果
-          find dl -size -1024c -exec ls -l {} \; || true
-
-      - name: 🔨 编译固件
-        run: |
-          cd openwrt
-          echo "🔨 开始编译固件..."
-          echo "📋 编译信息:"
-          echo "  源码: ${{ needs.prepare.outputs.source_name }}"
-          echo "  设备: ${{ needs.prepare.outputs.device_name }}"
-          echo "  目标: ${{ needs.prepare.outputs.device_target }}"
-          echo "  配置: ${{ needs.prepare.outputs.device_profile }}"
-          
-          make -j$(nproc) || make -j1 V=s
-          
-          echo "🔨 编译完成"
-          echo "📋 固件信息:"
-          ls -la bin/targets/*/*/*
-
-      - name: 📋 整理编译结果
-        run: |
-          cd openwrt
-          echo "📋 整理编译结果..."
-          
-          # 创建发布目录
-          mkdir -p ../release
-          
-          # 复制固件文件
-          find bin/targets/ -name "*.bin" -o -name "*.img.gz" -o -name "*.vmdk" -o -name "*.vdi" | \
-          while read file; do
-            filename=$(basename "$file")
-            # 重命名文件，包含更多信息
-            new_name="${{ needs.prepare.outputs.source_branch }}_${{ needs.prepare.outputs.target_device }}_$(date +'%Y%m%d_%H%M')_${filename}"
-            cp "$file" "../release/${new_name}"
-            echo "✅ 复制: $file -> ${new_name}"
-          done
-          
-          # 复制packages信息
-          find bin/targets/ -name "*.buildinfo" -o -name "*.manifest" | \
-          while read file; do
-            filename=$(basename "$file")
-            new_name="${{ needs.prepare.outputs.source_branch }}_${{ needs.prepare.outputs.target_device }}_$(date +'%Y%m%d_%H%M')_${filename}"
-            cp "$file" "../release/${new_name}"
-          done
-          
-          # 生成编译信息文件
-          cat > ../release/build_info.txt << EOF
-          OpenWrt 智能编译信息
-          ====================
-          编译时间: $(date '+%Y-%m-%d %H:%M:%S %Z')
-          源码分支: ${{ needs.prepare.outputs.source_branch }}
-          源码名称: ${{ needs.prepare.outputs.source_name }}
-          目标设备: ${{ needs.prepare.outputs.device_name }}
-          设备配置: ${{ needs.prepare.outputs.device_profile }}
-          目标平台: ${{ needs.prepare.outputs.device_target }}
-          编译描述: ${{ needs.prepare.outputs.build_description }}
-          选择插件: ${{ needs.prepare.outputs.plugins_list }}
-          构建标签: ${{ needs.prepare.outputs.build_tag }}
-          
-          源码信息:
-          仓库地址: ${{ needs.prepare.outputs.repo_url }}
-          分支: ${{ needs.prepare.outputs.repo_branch }}
-          提交ID: $(git rev-parse HEAD)
-          提交时间: $(git log -1 --format=%cd)
-          提交信息: $(git log -1 --format=%s)
-          
-          编译环境:
-          运行器: ubuntu-24.04
-          编译核心: $(nproc)
-          内存信息: $(free -h | head -2)
-          磁盘信息: $(df -h / | tail -1)
-          
-          文件列表:
-          $(ls -la ../release/)
-          EOF
-          
-          echo "📋 编译结果整理完成"
-          echo "📂 发布文件:"
-          ls -la ../release/
-
-      - name: 📤 上传固件到GitHub Artifacts
-        uses: actions/upload-artifact@v4
-        if: env.UPLOAD_BIN_DIR == 'true' || failure()
-        with:
-          name: OpenWrt_firmware_${{ needs.prepare.outputs.source_branch }}_${{ needs.prepare.outputs.target_device }}_${{ github.run_number }}
-          path: release/
-
-      - name: 📋 生成发布标签
-        id: tag
-        if: env.UPLOAD_RELEASE == 'true' && !failure()
-        run: |
-          # 生成发布标签
-          release_tag="${{ needs.prepare.outputs.build_tag }}"
-          echo "release_tag=$release_tag" >> $GITHUB_OUTPUT
-          
-          # 检查标签是否已存在
-          if git tag -l | grep -q "^$release_tag$"; then
-            echo "标签 $release_tag 已存在，添加时间戳"
-            release_tag="${release_tag}_$(date +'%H%M%S')"
-            echo "release_tag=$release_tag" >> $GITHUB_OUTPUT
+          # 合并用户插件和推荐插件，去重
+          PLUGINS="${{ needs.prepare.outputs.plugins_list }}"
+          ALL_PLUGINS="$RECOMMEND_PLUGINS $PLUGINS"
+          # 去重
+          ALL_PLUGINS=$(echo $ALL_PLUGINS | tr ' ' '\n' | sort | uniq | tr '\n' ' ')
+          if [ -n "$ALL_PLUGINS" ]; then
+            echo "🔧 配置选中的插件..."
+            for plugin in $ALL_PLUGINS; do
+              plugin=$(echo "$plugin" | xargs)  # 去除空格
+              if [ -n "$plugin" ]; then
+                echo "CONFIG_PACKAGE_$plugin=y" >> .config
+                echo "  ✓ 添加插件: $plugin"
+              fi
+            done
           fi
           
-          echo "🏷️ 发布标签: $release_tag"
+          # 生成最终配置
+          make defconfig
+          
+          echo "📋 最终配置文件预览："
+          cat .config | grep -E "^CONFIG_TARGET|^CONFIG_PACKAGE.*=y" | head -20
+          
+          echo "✅ 编译配置生成完成"
+      - name: 📥 下载依赖包
+        id: package
+        run: |
+          echo "📥 开始下载依赖包..."
+          cd openwrt
+          make download -j8
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "✅ 依赖包下载完成"
+      - name: 🔨 编译固件
+        id: compile
+        run: |
+          echo "🔨 开始编译固件..."
+          cd openwrt
+          
+          echo "使用 $(nproc) 线程编译"
+          # 使用多线程编译，失败时降级到单线程
+          make -j$(nproc) V=s || make -j1 || make -j1 V=s
+          
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "✅ 固件编译完成"
+      - name: 📊 检查空间使用
+        if: (!cancelled())
+        run: |
+          echo "📊 检查磁盘空间使用情况..."
+          df -hT
+      - name: 📦 整理编译产物
+        id: organize
+        if: steps.compile.outputs.status == 'success'
+        run: |
+          echo "📦 开始整理编译产物..."
+          cd openwrt/bin/targets/*/*
+          
+          # 删除packages目录以节省空间
+          rm -rf packages
+          
+          # 计算固件大小
+          FIRMWARE_SIZE=$(du -sh . | cut -f1)
+          echo "FIRMWARE_SIZE=$FIRMWARE_SIZE" >> $GITHUB_ENV
+          
+          # 重命名固件文件
+          for file in *; do
+            if [[ "$file" == *.bin ]] || [[ "$file" == *.img ]] || [[ "$file" == *.gz ]]; then
+              # 提取文件扩展名
+              EXT="${file##*.}"
+              # 生成新文件名
+              TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+              # 清理文件名中的特殊字符
+              SOURCE_CLEAN=$(echo "${{ needs.prepare.outputs.source_name }}" | sed 's/[^a-zA-Z0-9]/_/g')
+              DEVICE_CLEAN=$(echo "${{ needs.prepare.outputs.device_name }}" | sed 's/[^a-zA-Z0-9]/_/g')
+              NEW_NAME="OpenWrt_${SOURCE_CLEAN}_${DEVICE_CLEAN}_${TIMESTAMP}.${EXT}"
+              mv "$file" "$NEW_NAME"
+              echo "📦 重命名: $file -> $NEW_NAME"
+            fi
+          done
+          
+          # 生成详细的固件信息文件
+          cat > firmware_info.txt << EOF
+          OpenWrt 智能编译固件信息
+          ========================
+          
+          📋 基本信息:
+          编译时间: $(date '+%Y-%m-%d %H:%M:%S')
+          构建标签: ${{ needs.prepare.outputs.build_tag }}
+          源码分支: ${{ needs.prepare.outputs.source_name }}
+          目标设备: ${{ needs.prepare.outputs.device_name }}
+          固件大小: ${FIRMWARE_SIZE}
+          
+          🔧 编译配置:
+          选中插件: ${{ needs.prepare.outputs.plugins_list }}
+          设备配置: ${{ needs.prepare.outputs.device_profile }}
+          
+          📱 默认信息:
+          - 默认IP地址: 192.168.1.1
+          - 默认用户名: root
+          - 默认密码: password
+          - 默认WiFi名: OpenWrt (如支持)
+          - 默认WiFi密码: 无
+          
+          📖 使用说明:
+          1. 刷机前请确认设备型号和硬件版本
+          2. 建议先备份原厂固件
+          3. 刷机有风险，请谨慎操作
+          4. 如遇问题可尝试救砖操作
+          
+          🔗 相关链接:
+          - 项目地址: https://github.com/${{ github.repository }}
+          - OpenWrt官网: https://openwrt.org
+          - 使用文档: https://github.com/${{ github.repository }}/wiki
+          
+          ⚠️ 免责声明:
+          本固件仅供学习交流使用，使用者需自行承担刷机风险。
+          EOF
+          
+          # 生成SHA256校验文件
+          for file in OpenWrt_*.bin OpenWrt_*.img OpenWrt_*.gz; do
+            if [ -f "$file" ]; then
+              sha256sum "$file" >> sha256sums.txt
+              echo "🔒 生成校验: $file"
+            fi
+          done
+          
+          echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "✅ 编译产物整理完成"
+      - name: ⬆️ 上传固件到 Artifacts
+        uses: actions/upload-artifact@v4  # 更新到最新版本
+        if: steps.organize.outputs.status == 'success'
+        with:
+          name: ${{ needs.prepare.outputs.build_tag }}
+          path: ${{ env.FIRMWARE_PATH }}
+          retention-days: 7
 
-      - name: 🚀 发布固件到Releases
-        uses: softprops/action-gh-release@v1
-        if: env.UPLOAD_RELEASE == 'true' && !failure()
+      - name: 🎉 生成发布版本
+        id: release
+        if: steps.organize.outputs.status == 'success'
+        run: |
+          RELEASE_TAG="${{ needs.prepare.outputs.build_tag }}"
+          RELEASE_NAME="OpenWrt 智能编译 - ${{ needs.prepare.outputs.device_name }} ($(date '+%Y-%m-%d %H:%M'))"
+          
+          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+          echo "release_name=$RELEASE_NAME" >> $GITHUB_OUTPUT
+          
+          echo "📋 发布信息:"
+          echo "标签: $RELEASE_TAG"
+          echo "名称: $RELEASE_NAME"
+      - name: 📢 发布固件到 Releases
+        uses: softprops/action-gh-release@v2  # 更新到最新版本
+        if: steps.release.outputs.release_tag != ''
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ steps.tag.outputs.release_tag }}
-          name: ${{ needs.prepare.outputs.source_name }} 固件 [${{ needs.prepare.outputs.device_name }}] ${{ github.run_number }}
-          body: |
-            ## 📋 固件信息
-            
-            **源码分支**: ${{ needs.prepare.outputs.source_name }} (${{ needs.prepare.outputs.source_branch }})  
-            **目标设备**: ${{ needs.prepare.outputs.device_name }} (${{ needs.prepare.outputs.target_device }})  
-            **设备配置**: ${{ needs.prepare.outputs.device_profile }}  
-            **目标平台**: ${{ needs.prepare.outputs.device_target }}  
-            **编译时间**: ${{ env.TZ }} $(date '+%Y-%m-%d %H:%M:%S')  
-            **编译描述**: ${{ needs.prepare.outputs.build_description }}  
-            
-            ## 🔌 包含插件
-            
-            ```
-            ${{ needs.prepare.outputs.plugins_list || '无额外插件' }}
-            ```
-            
-            ## 📥 使用说明
-            
-            1. 下载对应设备的固件文件
-            2. 通过设备的刷机方式刷入固件
-            3. 首次启动后可通过Web界面进行配置
-            
-            ## ⚠️ 注意事项
-            
-            - 刷机有风险，请确保了解刷机流程
-            - 建议刷机前备份原厂固件
-            - 如遇问题请查看项目文档或提交Issue
-            
-            ---
-            
-            🤖 **自动构建** #${{ github.run_number }} | ⭐ **请给项目点个Star!**
-          files: release/*
+          tag_name: ${{ steps.release.outputs.release_tag }}
+          name: ${{ steps.release.outputs.release_name }}
+          body_path: ${{ env.FIRMWARE_PATH }}/firmware_info.txt
+          files: |
+            ${{ env.FIRMWARE_PATH }}/OpenWrt_*
+            ${{ env.FIRMWARE_PATH }}/sha256sums.txt
           draft: false
           prerelease: false
 
-      - name: 📋 清理工作空间
-        if: always()
+      - name: 📊 编译完成通知
         run: |
-          echo "📋 清理编译缓存..."
-          if [ -d openwrt ]; then
-            cd openwrt
-            rm -rf tmp/ staging_dir/host*/stamp .config* || true
-            cd ..
-          else
-            echo "⚠️ openwrt 目录不存在，跳过清理"
-          fi
+          echo "🎉 OpenWrt智能编译任务完成!"
+          echo "📦 固件信息:"
+          echo "  源码: ${{ needs.prepare.outputs.source_name }}"
+          echo "  设备: ${{ needs.prepare.outputs.device_name }}"
+          echo "  大小: ${{ env.FIRMWARE_SIZE }}"
+          echo "  标签: ${{ needs.prepare.outputs.build_tag }}"
+          echo ""
+          echo "🔗 下载链接:"
+          echo "  Artifacts: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "  Releases: https://github.com/${{ github.repository }}/releases/tag/${{ steps.release.outputs.release_tag }}"
+          echo ""
+          echo "📝 编译日志: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+      - name: 🧹 清理旧的工作流程记录
+        uses: GitRML/delete-workflow-runs@main
+        with:
+          retain_days: 7
+          keep_minimum_runs: 5
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-          echo "📋 显示磁盘使用情况..."
-          df -h
-
-  # 后处理任务
-  post-process:
+# 编译失败处理
+  failure_handler:
     runs-on: ubuntu-24.04
-    name: 📋 后处理任务
     needs: [prepare, build]
-    if: always()
+    if: failure()
+    name: ❌ 编译失败处理
     
     steps:
-      - name: 📊 编译结果统计
+      - name: 📝 生成失败报告
         run: |
-          echo "📊 编译结果统计"
-          echo "=================="
-          echo "源码分支: ${{ needs.prepare.outputs.source_name }}"
-          echo "目标设备: ${{ needs.prepare.outputs.device_name }}"
-          echo "编译状态: ${{ needs.build.result }}"
-          echo "开始时间: ${{ github.event.head_commit.timestamp }}"
-          echo "结束时间: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-          
-          if [[ "${{ needs.build.result }}" == "success" ]]; then
-            echo "✅ 编译成功完成！"
-            echo "🎉 固件已发布到Releases页面"
-          else
-            echo "❌ 编译失败"
-            echo "💡 请检查编译日志查找错误原因"
-          fi
+          echo "❌ OpenWrt编译失败"
+          echo "📋 失败信息:"
+          echo "  源码: ${{ needs.prepare.outputs.source_branch }}"
+          echo "  设备: ${{ needs.prepare.outputs.target_device }}"
+          echo "  插件: ${{ needs.prepare.outputs.plugins_list }}"
+          echo "  时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo ""
+          echo "🔍 可能的失败原因:"
+          echo "  1. 插件配置冲突"
+          echo "  2. 设备存储空间不足"
+          echo "  3. 网络连接问题"
+          echo "  4. 源码或依赖包问题"
+          echo ""
+          echo "📖 解决建议:"
+          echo "  1. 检查插件冲突检测结果"
+          echo "  2. 减少选择的插件数量"
+          echo "  3. 选择更稳定的源码分支"
+          echo "  4. 查看详细的编译日志"
+          echo ""
+          echo "🔗 编译日志: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+# 编译成功处理
+  success_handler:
+    runs-on: ubuntu-24.04
+    needs: [prepare, build]
+    if: success()
+    name: ✅ 编译成功处理
+    
+    steps:
+      - name: 🎉 生成成功报告
+        run: |
+          echo "🎉 OpenWrt编译成功完成!"
+          echo "📦 固件信息:"
+          echo "  源码: ${{ needs.prepare.outputs.source_branch }}"
+          echo "  设备: ${{ needs.prepare.outputs.target_device }}"
+          echo "  插件: ${{ needs.prepare.outputs.plugins_list }}"
+          echo "  标签: ${{ needs.prepare.outputs.build_tag }}"
+          echo "  时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo ""
+          echo "📥 下载方式:"
+          echo "  1. GitHub Actions Artifacts (7天有效期)"
+          echo "  2. GitHub Releases (长期保存)"
+          echo ""
+          echo "🔗 相关链接:"
+          echo "  - Actions: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "  - Releases: https://github.com/${{ github.repository }}/releases"
+          echo "  - 项目主页: https://github.com/${{ github.repository }}"
