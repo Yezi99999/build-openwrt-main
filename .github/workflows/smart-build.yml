@@ -565,12 +565,6 @@ jobs:
               # 添加特定配置
               ;;
           esac
-
-          echo "🔍 检查依赖..."
-          make prereq V=s || { echo "❌ 依赖检查失败"; cat logs/prereq.log || true; exit 1; }
-
-          echo "📋 生成最终配置..."
-          make defconfig V=s || { echo "❌ defconfig 失败"; exit 1; }
           
           echo "✅ 第一阶段自定义脚本执行完成"
 
@@ -599,14 +593,6 @@ jobs:
           
           echo "✅ 第二阶段自定义脚本执行完成"
   
-      - name: 📋 生成配置
-        run: |
-          cd openwrt
-          echo "📋 生成最终配置..."
-          make defconfig FORCE=1
-          
-          echo "📋 配置差异对比:"
-          ./scripts/diffconfig.sh || true
 
       - name: 📥 下载依赖包
         run: |
