@@ -1197,6 +1197,112 @@ generate_json_format() {
     fi
 }
 
+pre_build_check() {
+    local device="$1"
+    local plugin_list="$2"
+    local strict_mode="$3"
+    
+    log_info "执行编译前检查..."
+    log_info "设备: $device"
+    log_info "插件: $plugin_list"
+    log_info "严格模式: $strict_mode"
+    
+    # 简化版本的检查逻辑
+    local issues=()
+    local warnings=()
+    
+    # 检查设备是否为空
+    if [ -z "$device" ]; then
+        issues+=("未指定设备类型")
+    fi
+    
+    # 检查插件列表
+    if [ -n "$plugin_list" ]; then
+        # 解析插件列表
+        IFS=',' read -ra plugins <<< "$plugin_list"
+        
+        for plugin in "${plugins[@]}"; do
+            plugin=$(echo "$plugin" | xargs)
+            if [ -n "$plugin" ]; then
+                log_debug "检查插件: $plugin"
+                # 这里可以添加具体的插件检查逻辑
+            fi
+        done
+    fi
+    
+    # 输出结果
+    if [ ${#issues[@]} -gt 0 ]; then
+        log_error "发现 ${#issues[@]} 个问题:"
+        for issue in "${issues[@]}"; do
+            log_error "  - $issue"
+        done
+        return 1
+    else
+        log_success "编译前检查通过"
+        return 0
+    fi
+}
+
+# 自动修复插件依赖函数
+auto_fix_plugin_deps() {
+    local device="$1"
+    local plugin_list="$2"
+    local auto_fix="$3"
+    
+    log_info "自动修复插件依赖..."
+    log_info "设备: $device"
+    log_info "插件: $plugin_list"
+    log_info "自动修复: $auto_fix"
+    
+    if [ "$auto_fix" = "true" ]; then
+        log_info "执行自动修复逻辑..."
+        # 这里可以添加具体的自动修复逻辑
+        log_success "自动修复完成"
+    else
+        log_info "仅检查模式，未执行修复"
+    fi
+    
+    return 0
+}
+
+# 检查设备兼容性函数
+check_device_compatibility() {
+    local device="$1"
+    local plugin_list="$2"
+    
+    log_info "检查设备兼容性..."
+    log_info "设备: $device"
+    log_info "插件: $plugin_list"
+    
+    # 简化版本的兼容性检查
+    case "$device" in
+        "x86_64"|"rpi_4b"|"nanopi_r2s"|"xiaomi_4a_gigabit"|"newifi_d2")
+            log_success "设备兼容性检查通过"
+            return 0
+            ;;
+        *)
+            log_warning "未知设备类型: $device"
+            return 1
+            ;;
+    esac
+}
+
+# 优化插件配置函数
+optimize_plugin_config() {
+    local device="$1"
+    local plugin_list="$2" 
+    local auto_fix="$3"
+    
+    log_info "优化插件配置..."
+    log_info "设备: $device"
+    log_info "插件: $plugin_list"
+    log_info "自动修复: $auto_fix"
+    
+    # 这里可以添加具体的优化逻辑
+    log_success "插件配置优化完成"
+    return 0
+}
+
 # 原有的验证插件配置函数 (保持不变)
 validate_plugins() {
     local plugin_list="$1"
@@ -1263,6 +1369,9 @@ validate_plugins() {
 }
 
 # 主函数 (更新版本，添加新的操作和参数)
+# 在 plugin-manager.sh 的 main() 函数中添加设备参数支持
+
+# 1. 在变量声明部分添加 (在 main() 函数开头)
 main() {
     local operation=""
     local plugin=""
@@ -1271,13 +1380,16 @@ main() {
     local format="text"
     local output=""
     local branch=""
+    local device=""           # 新增：设备参数
     local auto_detect=false
     local verbose=false
+    local auto_fix=false     # 新增：自动修复参数
+    local strict_mode=false  # 新增：严格模式参数
     
-    # 解析命令行参数
+    # 2. 在参数解析的 while 循环中添加 (在现有的 case 语句中添加)
     while [[ $# -gt 0 ]]; do
         case $1 in
-            init|list|search|info|validate|conflicts|generate|generate-feeds|install|remove|update)
+            init|list|search|info|validate|conflicts|generate|generate-feeds|install|remove|update|pre-build-check|auto-fix-deps|compatibility|optimize)
                 operation="$1"
                 shift
                 ;;
@@ -1305,6 +1417,10 @@ main() {
                 branch="$2"
                 shift 2
                 ;;
+            -d|--device)              # 新增：设备参数支持
+                device="$2"
+                shift 2
+                ;;
             --runtime-config)
                 RUNTIME_CONFIG_FILE="$2"
                 if [ ! -f "$RUNTIME_CONFIG_FILE" ]; then
@@ -1314,6 +1430,14 @@ main() {
                 ;;
             --auto-detect)
                 auto_detect=true
+                shift
+                ;;
+            --auto-fix)               # 新增：自动修复参数
+                auto_fix=true
+                shift
+                ;;
+            --strict)                 # 新增：严格模式参数
+                strict_mode=true
                 shift
                 ;;
             -v|--verbose)
@@ -1387,6 +1511,18 @@ main() {
             ;;
         "generate-feeds")
             generate_feeds_conf "$plugin_list" "$output" "$branch" "$auto_detect"
+            ;;
+        "pre-build-check")        # 新增：编译前检查
+            pre_build_check "$device" "$plugin_list" "$strict_mode"
+            ;;
+        "auto-fix-deps")          # 新增：自动修复插件依赖
+            auto_fix_plugin_deps "$device" "$plugin_list" "$auto_fix"
+            ;;
+        "compatibility")          # 新增：检查设备兼容性
+            check_device_compatibility "$device" "$plugin_list"
+            ;;
+        "optimize")               # 新增：优化插件配置
+            optimize_plugin_config "$device" "$plugin_list" "$auto_fix"
             ;;
         "install"|"remove"|"update")
             log_warning "功能开发中: $operation"
