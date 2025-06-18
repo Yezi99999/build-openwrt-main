@@ -425,25 +425,12 @@ jobs:
           case "${{ needs.prepare.outputs.target_device }}" in
             "x86_64")
               echo "生成x86_64基础配置..."
-              {
-                echo "CONFIG_TARGET_x86=y"
-                echo "CONFIG_TARGET_x86_64=y" 
-                echo "CONFIG_TARGET_x86_64_DEVICE_generic=y"
-                echo "CONFIG_BUILD_NLS=y"
-                echo "CONFIG_EXPERIMENTAL=y"
-                echo "CONFIG_IB=y"
-                echo "CONFIG_IB_STANDALONE=y"
-                echo "CONFIG_MAKE_TOOLCHAIN=y"
-                echo "CONFIG_SDK=y"
-                echo "CONFIG_VDI_IMAGES=y"
-                echo "CONFIG_GRUB_IMAGES=y"
-                echo "CONFIG_GRUB_EFI_IMAGES=y"
-                echo "CONFIG_TARGET_IMAGES_GZIP=y"
-                echo "CONFIG_TARGET_KERNEL_PARTSIZE=32"
-                echo "CONFIG_TARGET_ROOTFS_PARTSIZE=1024"
-              } > .config
-              RECOMMEND_PLUGINS="luci kmod-e1000 kmod-igb"
-              ;;
+              cat > .config << 'EOF'
+          CONFIG_TARGET_x86=y
+          CONFIG_TARGET_x86_64=y
+          CONFIG_TARGET_x86_64_DEVICE_generic=y
+          CONFIG_TARGET_IMAGES_GZIP=y
+          EOF
               RECOMMEND_PLUGINS="luci kmod-e1000 kmod-igb"
               ;;
             "xiaomi_4a_gigabit"|"newifi_d2")
