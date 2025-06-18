@@ -603,7 +603,7 @@ apply_auto_fixes() {
     log_info "开始应用自动修复..."
     
     # 确保修复脚本存在且可执行
-    local main_fix_script="$FIXES_DIR/fix-build-issues.sh"
+    local main_fix_script="fixes/fix-build-issues.sh"
     
     if [ ! -f "$main_fix_script" ]; then
         log_warning "主修复脚本不存在: $main_fix_script"
