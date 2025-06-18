@@ -494,6 +494,15 @@ jobs:
           
           echo "🔄 复制 feeds 配置..."
           cp ../feeds.conf.default ./
+
+          echo "🔄 复制 config 配置..."
+          cp ../.config ./
+
+          echo "📋 当前feeds配置:"
+          cat feeds.conf.default
+
+          echo "📋 编译配置预览:"
+          head -30 openwrt/.config
           
           echo "🔄 更新 feeds..."
           ./scripts/feeds update -a
@@ -502,33 +511,80 @@ jobs:
           ./scripts/feeds install -a
           
           echo "✅ Feeds 更新完成"
-      
-      - name: ⚙️ 加载编译配置
+
+      - name: 🔧 第一阶段自定义脚本
         run: |
+          echo "🔧 执行第一阶段自定义脚本..."
           cd openwrt
           
-          echo "⚙️ 加载编译配置..."
-          cp ../.config ./
+          # 根据源码分支执行相应的自定义操作
+          case "${{ needs.prepare.outputs.source_branch }}" in
+            "openwrt-main")
+              echo "🔧 OpenWrt官方源码自定义配置..."
+              # 删除可能冲突的包
+              rm -rf package/utils/{ucode,fbtest} || true
+              ;;
+            "lede-master")
+              echo "🔧 Lean's LEDE源码自定义配置..."
+              # 删除可能冲突的包
+              rm -rf package/lean/{samba4,luci-app-samba4,luci-app-ttyd} || true
+              ;;
+            "immortalwrt-master")
+              echo "🔧 ImmortalWrt源码自定义配置..."
+              # 删除可能冲突的包
+              rm -rf package/emortal/{autosamba,ipv6-helper} || true
+              ;;
+            "Lienol-master")
+              echo "🔧 Lienol源码自定义配置..."
+              # 添加特定配置
+              ;;
+          esac
           
-          echo "🔧 生成完整配置..."
+          echo "✅ 第一阶段自定义脚本执行完成"
+
+      - name: 🔧 第二阶段自定义脚本
+        run: |
+          echo "🔧 执行第二阶段自定义脚本..."
+          cd openwrt
+          
+          # 修改默认IP地址（根据设备类型可能需要不同配置）
+          case "${{ needs.prepare.outputs.target_device }}" in
+            "x86_64")
+              echo "🔧 配置X86设备默认参数..."
+              sed -i 's/192.168.1.1/192.168.50.1/g' package/base-files/files/bin/config_generate || true
+              ;;
+            *)
+              echo "🔧 配置路由器设备默认参数..."
+              # 保持默认IP 192.168.1.1 对于路由器设备通常更合适
+              ;;
+          esac
+          
+          # 修改默认主机名
+          sed -i "s/OpenWrt/${{ needs.prepare.outputs.device_name }}/g" package/base-files/files/bin/config_generate || true
+          
+          # 修改时区
+          sed -i "s/'UTC'/'CST-8'/g" package/base-files/files/bin/config_generate || true
+          
+          echo "✅ 第二阶段自定义脚本执行完成"
+  
+      - name: 📋 生成配置
+        run: |
+          cd openwrt
+          echo "📋 生成最终配置..."
           make defconfig
           
-          echo "📋 配置摘要:"
-          make info
-          
-          echo "✅ 编译配置加载完成"
-      
-      - name: 📥 下载编译依赖
+          echo "📋 配置差异对比:"
+          ./scripts/diffconfig.sh || true
+
+      - name: 📥 下载依赖包
         run: |
           cd openwrt
-          
           echo "📥 下载编译依赖包..."
-          make download -j$(nproc) V=s
+          make download -j8
           
-          echo "🔍 检查下载状态..."
+          # 检查下载结果
           find dl -size -1024c -exec ls -l {} \; || true
-          
-          echo "✅ 依赖下载完成"
+  
       
       - name: 🔨 编译固件
         run: |
