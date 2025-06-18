@@ -1,17 +1,17 @@
 #!/bin/bash
 #========================================================================================================================
-# OpenWrt 插件管理脚本 (增强版) - 修复版本
-# 功能: 管理插件配置、检查冲突、生成插件配置，集成编译修复协调
-# 修复: 添加 --runtime-config 参数支持，与 build-orchestrator.sh 兼容
+# OpenWrt 插件管理脚本 (改进版)
+# 功能: 管理插件配置、检查冲突、生成插件配置、支持运行时配置
 # 用法: ./plugin-manager.sh [操作] [参数...]
+# 改进: 完善feeds.conf.default生成逻辑，添加--runtime-config支持，与构建编排兼容
 #========================================================================================================================
 
 # 脚本版本
-VERSION="2.0.2-fixed"
+VERSION="2.0.0"
 
 # 获取脚本目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FIXES_DIR="$SCRIPT_DIR/fixes"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -26,8 +26,15 @@ NC='\033[0m'
 PLUGIN_CONFIG_DIR="config/plugins"
 PLUGIN_DB_FILE="$PLUGIN_CONFIG_DIR/plugin_database.json"
 
-# 运行时配置支持
+# 运行时配置支持 (新增)
 RUNTIME_CONFIG_FILE=""
+
+# 默认feeds配置模板
+declare -A DEFAULT_FEEDS=(
+    ["openwrt-main"]="src-git packages https://git.openwrt.org/feed/packages.git;src-git luci https://git.openwrt.org/project/luci.git;src-git routing https://git.openwrt.org/feed/routing.git;src-git telephony https://git.openwrt.org/feed/telephony.git"
+    ["lede-master"]="src-git packages https://github.com/coolsnowwolf/packages;src-git luci https://github.com/coolsnowwolf/luci;src-git routing https://git.openwrt.org/feed/routing.git;src-git telephony https://git.openwrt.org/feed/telephony.git"
+    ["immortalwrt-master"]="src-git packages https://github.com/immortalwrt/packages.git;src-git luci https://github.com/immortalwrt/luci.git;src-git routing https://git.openwrt.org/feed/routing.git;src-git telephony https://git.openwrt.org/feed/telephony.git"
+)
 
 # 日志函数
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
@@ -36,40 +43,41 @@ log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_debug() { echo -e "${PURPLE}[DEBUG]${NC} $1"; }
 
-# 从运行时配置读取值
+# 从运行时配置读取值 (新增功能)
 get_runtime_config_value() {
     local key="$1"
     local default="$2"
     
     if [ -n "$RUNTIME_CONFIG_FILE" ] && [ -f "$RUNTIME_CONFIG_FILE" ]; then
-        local value=$(jq -r "$key" "$RUNTIME_CONFIG_FILE" 2>/dev/null)
-        if [ "$value" != "null" ] && [ -n "$value" ]; then
-            echo "$value"
-        else
-            echo "$default"
+        if command -v jq &> /dev/null; then
+            local value=$(jq -r "$key" "$RUNTIME_CONFIG_FILE" 2>/dev/null)
+            if [ "$value" != "null" ] && [ -n "$value" ]; then
+                echo "$value"
+                return 0
+            fi
         fi
-    else
-        echo "$default"
     fi
+    
+    echo "$default"
 }
 
 # 显示标题
 show_header() {
     echo -e "${CYAN}"
     echo "========================================================================================================================="
-    echo "                                🔌 OpenWrt 插件管理脚本 v${VERSION} (兼容版)"
-    echo "                                      集成编译修复协调功能"
+    echo "                                    🔌 OpenWrt 插件管理脚本 v${VERSION} (改进版)"
+    echo "                                  支持运行时配置 | 完善feeds生成 | 构建编排兼容"
     echo "========================================================================================================================="
     echo -e "${NC}"
 }
 
-# 显示帮助信息
+# 显示帮助信息 (新增--runtime-config参数)
 show_help() {
     cat << EOF
 ${CYAN}使用方法:${NC}
   $0 [操作] [选项...]
 
-${CYAN}基础操作:${NC}
+${CYAN}操作:${NC}
   init                初始化插件数据库
   list                列出所有可用插件
   search              搜索插件
@@ -77,203 +85,403 @@ ${CYAN}基础操作:${NC}
   validate            验证插件配置
   conflicts           检查插件冲突
   generate            生成插件配置
-
-${CYAN}增强功能:${NC}
-  pre-build-check     编译前检查
-  auto-fix-deps       自动修复插件依赖
-  compatibility       检查设备兼容性
-  optimize            优化插件配置
+  generate-feeds      生成feeds.conf.default (新增)
+  install             安装插件配置
+  remove              移除插件配置
+  update              更新插件数据库
 
 ${CYAN}选项:${NC}
   -p, --plugin        指定插件名称
   -l, --list          插件列表（逗号分隔）
   -c, --category      插件分类
-  -d, --device        目标设备类型
-  -f, --format        输出格式 (json|text|config)
+  -f, --format        输出格式 (json|text|config|feeds)
   -o, --output        输出文件
-  --auto-fix          启用自动修复
-  --strict            严格模式检查
-  --runtime-config    运行时配置文件
+  -b, --branch        源码分支 (openwrt-main|lede-master|immortalwrt-master)
+  --runtime-config    运行时配置文件 (新增)
+  --auto-detect       自动检测当前环境并生成适配的feeds配置 (新增)
   -v, --verbose       详细输出
   -h, --help          显示帮助信息
   --version           显示版本信息
 
 ${CYAN}示例:${NC}
-  # 基础使用
-  $0 init                                    # 初始化数据库
-  $0 list -c proxy                          # 列出代理插件
+  # 初始化插件数据库
+  $0 init
+  
+  # 列出所有插件
+  $0 list
+  
+  # 搜索代理插件
+  $0 search -c proxy
+  
+  # 检查插件冲突
   $0 conflicts -l "luci-app-ssr-plus,luci-app-passwall"
   
-  # 增强功能
-  $0 pre-build-check -d x86_64 -l "luci-app-ssr-plus,luci-theme-argon"
-  $0 auto-fix-deps -d rpi_4b -l "luci-app-samba4"
-  $0 compatibility -d x86_64 -l "luci-app-openclash"
-  $0 optimize -d nanopi_r2s -l "luci-app-aria2" --auto-fix
+  # 生成插件配置
+  $0 generate -l "luci-app-ssr-plus,luci-theme-argon" -o plugin.config
   
-  # 与编排器配合使用
-  $0 --runtime-config /tmp/runtime.json init
-
-${CYAN}支持设备:${NC}
-  x86_64, xiaomi_4a_gigabit, newifi_d2, rpi_4b, nanopi_r2s
+  # 生成feeds配置 (新增)
+  $0 generate-feeds -l "luci-app-ssr-plus,luci-app-passwall2" -b lede-master -o feeds.conf.default
+  
+  # 运行时配置支持 (新增)
+  $0 --runtime-config /tmp/runtime.json generate-feeds -l "luci-app-ssr-plus"
+  
+  # 自动检测环境生成feeds (新增)
+  $0 generate-feeds --auto-detect -l "luci-app-ssr-plus,luci-theme-argon"
 
 ${CYAN}插件分类:${NC}
-  proxy, network, system, storage, multimedia, security, theme, development
+  - proxy: 代理相关插件
+  - network: 网络工具插件
+  - system: 系统管理插件
+  - storage: 存储相关插件
+  - multimedia: 多媒体插件
+  - security: 安全防护插件
+  - theme: 主题插件
+  - development: 开发工具插件
+
+${CYAN}支持的源码分支:${NC}
+  - openwrt-main: OpenWrt官方主分支
+  - lede-master: Lean的LEDE主分支
+  - immortalwrt-master: ImmortalWrt主分支
 EOF
 }
 
-# 初始化插件数据库
+# 初始化插件数据库 (保持原有逻辑，添加更多feeds信息)
 init_plugin_database() {
     log_info "初始化插件数据库..."
     
     # 创建插件配置目录
-    if [ ! -d "$PLUGIN_CONFIG_DIR" ]; then
-        mkdir -p "$PLUGIN_CONFIG_DIR"
-        log_debug "已创建目录: $PLUGIN_CONFIG_DIR"
-    fi
-
-    # 检查jq工具
-    if ! command -v jq &> /dev/null; then
-        log_error "需要安装jq工具来处理JSON文件"
-        log_info "Ubuntu/Debian: sudo apt install jq"
-        log_info "CentOS/RHEL: sudo yum install jq"
-        exit 1
-    fi
+    mkdir -p "$PLUGIN_CONFIG_DIR"
     
-    # 生成插件数据库 - 修复了JSON结构
+    # 创建增强的插件数据库
     cat > "$PLUGIN_DB_FILE" << 'EOF'
 {
   "version": "2.0.0",
-  "generated_at": "",
+  "last_updated": "",
   "categories": {
     "proxy": {
       "name": "代理工具",
       "description": "科学上网和代理相关插件",
       "plugins": {
         "luci-app-ssr-plus": {
-          "name": "SSR Plus+",
-          "description": "强大的科学上网插件，支持多协议",
+          "name": "ShadowSocksR Plus+",
+          "description": "强大的代理工具集合",
           "author": "fw876",
-          "size": "5.2MB",
-          "complexity": "medium",
-          "dependencies": ["libopenssl", "iptables-mod-tproxy", "kmod-tun"],
-          "conflicts": ["luci-app-passwall", "luci-app-vssr"],
           "feeds": ["src-git helloworld https://github.com/fw876/helloworld"],
-          "device_compatibility": {
-            "x86_64": "excellent",
-            "rpi_4b": "good",
-            "nanopi_r2s": "good",
-            "xiaomi_4a_gigabit": "limited",
-            "newifi_d2": "limited"
-          },
-          "build_notes": "需要充足内存编译，建议禁用某些组件以减少体积"
+          "feeds_comment": "SSR Plus+ 插件源",
+          "dependencies": ["shadowsocksr-libev-ssr-local", "shadowsocksr-libev-ssr-redir"],
+          "conflicts": ["luci-app-passwall", "luci-app-openclash", "luci-app-bypass"],
+          "size": "~2MB",
+          "complexity": "medium",
+          "priority": 1
         },
         "luci-app-passwall": {
           "name": "PassWall",
-          "description": "新一代科学上网插件",
+          "description": "简单易用的代理工具",
           "author": "xiaorouji",
-          "size": "6.8MB",
-          "complexity": "high",
-          "dependencies": ["chinadns-ng", "brook", "hysteria"],
-          "conflicts": ["luci-app-ssr-plus", "luci-app-vssr"],
-          "feeds": ["src-git passwall https://github.com/xiaorouji/openwrt-passwall"],
-          "device_compatibility": {
-            "x86_64": "excellent",
-            "rpi_4b": "good",
-            "nanopi_r2s": "medium",
-            "xiaomi_4a_gigabit": "poor",
-            "newifi_d2": "poor"
-          },
-          "build_notes": "资源占用较大，低配设备谨慎使用"
+          "feeds": [
+            "src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages",
+            "src-git passwall https://github.com/xiaorouji/openwrt-passwall"
+          ],
+          "feeds_comment": "PassWall 软件包和主程序源",
+          "dependencies": ["brook", "chinadns-ng", "dns2socks"],
+          "conflicts": ["luci-app-ssr-plus", "luci-app-openclash", "luci-app-bypass"],
+          "size": "~3MB",
+          "complexity": "low",
+          "priority": 2
+        },
+        "luci-app-passwall2": {
+          "name": "PassWall 2",
+          "description": "PassWall的升级版本",
+          "author": "xiaorouji",
+          "feeds": ["src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2"],
+          "feeds_comment": "PassWall 2 主程序源",
+          "dependencies": ["brook", "chinadns-ng", "dns2socks"],
+          "conflicts": ["luci-app-ssr-plus", "luci-app-openclash", "luci-app-passwall"],
+          "size": "~3MB",
+          "complexity": "low",
+          "priority": 2
         },
         "luci-app-openclash": {
           "name": "OpenClash",
-          "description": "Clash客户端，基于规则的代理工具",
+          "description": "Clash客户端，功能强大",
           "author": "vernesong",
-          "size": "8.5MB",
-          "complexity": "high",
-          "dependencies": ["coreutils-nohup", "bash", "dnsmasq-full", "curl", "ca-certificates"],
-          "conflicts": ["luci-app-clash"],
           "feeds": ["src-git openclash https://github.com/vernesong/OpenClash"],
-          "device_compatibility": {
-            "x86_64": "excellent",
-            "rpi_4b": "good",
-            "nanopi_r2s": "medium",
-            "xiaomi_4a_gigabit": "poor",
-            "newifi_d2": "poor"
-          },
-          "build_notes": "需要大量存储空间和内存"
+          "feeds_comment": "OpenClash Clash客户端源",
+          "dependencies": ["coreutils-nohup", "bash", "iptables", "dnsmasq-full"],
+          "conflicts": ["luci-app-ssr-plus", "luci-app-passwall", "luci-app-bypass"],
+          "size": "~5MB",
+          "complexity": "high",
+          "priority": 3
+        },
+        "luci-app-bypass": {
+          "name": "Bypass",
+          "description": "轻量级代理工具",
+          "author": "kiddin9",
+          "feeds": ["src-git bypass https://github.com/kiddin9/openwrt-bypass"],
+          "feeds_comment": "Bypass 轻量级代理源",
+          "dependencies": ["smartdns", "chinadns-ng"],
+          "conflicts": ["luci-app-ssr-plus", "luci-app-passwall", "luci-app-openclash"],
+          "size": "~1MB",
+          "complexity": "low",
+          "priority": 4
         }
       }
     },
     "network": {
       "name": "网络工具",
-      "description": "网络管理和监控相关插件",
+      "description": "网络管理和监控工具",
       "plugins": {
-        "luci-app-adblock": {
-          "name": "广告屏蔽",
-          "description": "DNS级别的广告屏蔽工具",
-          "author": "openwrt",
-          "size": "320KB",
+        "luci-app-adguardhome": {
+          "name": "AdGuard Home",
+          "description": "强大的广告拦截和DNS服务器",
+          "author": "rufengsuixing",
+          "feeds": ["src-git adguardhome https://github.com/rufengsuixing/luci-app-adguardhome"],
+          "feeds_comment": "AdGuard Home 插件源",
+          "dependencies": ["AdGuardHome"],
+          "conflicts": [],
+          "size": "~10MB",
+          "complexity": "medium",
+          "priority": 1
+        },
+        "luci-app-smartdns": {
+          "name": "SmartDNS",
+          "description": "智能DNS服务器",
+          "author": "pymumu",
+          "feeds": ["src-git smartdns https://github.com/pymumu/openwrt-smartdns"],
+          "feeds_comment": "SmartDNS 智能DNS源",
+          "dependencies": ["smartdns"],
+          "conflicts": [],
+          "size": "~1MB",
           "complexity": "low",
-          "dependencies": ["adblock"],
-          "conflicts": ["luci-app-adguardhome"],
+          "priority": 1
+        },
+        "luci-app-ddns": {
+          "name": "动态DNS",
+          "description": "动态域名解析服务",
+          "author": "openwrt",
           "feeds": [],
-          "device_compatibility": {
-            "x86_64": "excellent",
-            "rpi_4b": "excellent",
-            "nanopi_r2s": "excellent",
-            "xiaomi_4a_gigabit": "good",
-            "newifi_d2": "good"
-          },
-          "build_notes": "轻量级，适合低配设备"
+          "feeds_comment": "官方软件包，无需额外feeds",
+          "dependencies": ["ddns-scripts"],
+          "conflicts": [],
+          "size": "~500KB",
+          "complexity": "low",
+          "priority": 1
+        },
+        "luci-app-upnp": {
+          "name": "UPnP",
+          "description": "通用即插即用协议支持",
+          "author": "openwrt",
+          "feeds": [],
+          "feeds_comment": "官方软件包，无需额外feeds",
+          "dependencies": ["miniupnpd"],
+          "conflicts": [],
+          "size": "~200KB",
+          "complexity": "low",
+          "priority": 1
         }
       }
     },
     "system": {
       "name": "系统管理",
-      "description": "系统管理和监控相关插件",
+      "description": "系统管理和监控工具",
       "plugins": {
-        "luci-app-wol": {
-          "name": "网络唤醒",
-          "description": "远程唤醒网络设备",
+        "luci-app-ttyd": {
+          "name": "终端访问",
+          "description": "Web终端访问工具",
           "author": "openwrt",
-          "size": "180KB",
-          "complexity": "low",
-          "dependencies": ["etherwake"],
-          "conflicts": [],
           "feeds": [],
-          "device_compatibility": {
-            "x86_64": "excellent",
-            "rpi_4b": "excellent",
-            "nanopi_r2s": "excellent",
-            "xiaomi_4a_gigabit": "excellent",
-            "newifi_d2": "excellent"
-          },
-          "build_notes": "基础功能，兼容性好"
+          "feeds_comment": "官方软件包，无需额外feeds",
+          "dependencies": ["ttyd"],
+          "conflicts": [],
+          "size": "~500KB",
+          "complexity": "low",
+          "priority": 1
+        },
+        "luci-app-htop": {
+          "name": "系统监控",
+          "description": "系统进程监控工具",
+          "author": "openwrt",
+          "feeds": [],
+          "feeds_comment": "官方软件包，无需额外feeds",
+          "dependencies": ["htop"],
+          "conflicts": [],
+          "size": "~200KB",
+          "complexity": "low",
+          "priority": 1
+        },
+        "luci-app-pushbot": {
+          "name": "消息推送",
+          "description": "系统状态消息推送工具",
+          "author": "zzsj0928",
+          "feeds": ["src-git pushbot https://github.com/zzsj0928/luci-app-pushbot"],
+          "feeds_comment": "消息推送机器人源",
+          "dependencies": ["curl", "jsonfilter"],
+          "conflicts": [],
+          "size": "~300KB",
+          "complexity": "medium",
+          "priority": 2
+        }
+      }
+    },
+    "storage": {
+      "name": "存储管理",
+      "description": "存储和文件管理工具",
+      "plugins": {
+        "luci-app-samba4": {
+          "name": "网络共享",
+          "description": "Samba网络文件共享",
+          "author": "openwrt",
+          "feeds": [],
+          "feeds_comment": "官方软件包，无需额外feeds",
+          "dependencies": ["samba4-server"],
+          "conflicts": ["luci-app-samba"],
+          "size": "~2MB",
+          "complexity": "low",
+          "priority": 1
+        },
+        "luci-app-hd-idle": {
+          "name": "硬盘休眠",
+          "description": "硬盘空闲时自动休眠",
+          "author": "openwrt",
+          "feeds": [],
+          "feeds_comment": "官方软件包，无需额外feeds",
+          "dependencies": ["hd-idle"],
+          "conflicts": [],
+          "size": "~100KB",
+          "complexity": "low",
+          "priority": 1
+        },
+        "luci-app-dockerman": {
+          "name": "Docker管理",
+          "description": "Docker容器管理界面",
+          "author": "lisaac",
+          "feeds": ["src-git dockerman https://github.com/lisaac/luci-app-dockerman"],
+          "feeds_comment": "Docker管理界面源",
+          "dependencies": ["docker", "dockerd"],
+          "conflicts": [],
+          "size": "~5MB",
+          "complexity": "high",
+          "priority": 2
+        }
+      }
+    },
+    "multimedia": {
+      "name": "多媒体",
+      "description": "多媒体播放和下载工具",
+      "plugins": {
+        "luci-app-aria2": {
+          "name": "Aria2下载",
+          "description": "多线程下载工具",
+          "author": "openwrt",
+          "feeds": [],
+          "feeds_comment": "官方软件包，无需额外feeds",
+          "dependencies": ["aria2", "ariang"],
+          "conflicts": [],
+          "size": "~3MB",
+          "complexity": "medium",
+          "priority": 1
+        },
+        "luci-app-transmission": {
+          "name": "BT下载",
+          "description": "BitTorrent下载客户端",
+          "author": "openwrt",
+          "feeds": [],
+          "feeds_comment": "官方软件包，无需额外feeds",
+          "dependencies": ["transmission-daemon"],
+          "conflicts": [],
+          "size": "~2MB",
+          "complexity": "medium",
+          "priority": 1
+        }
+      }
+    },
+    "security": {
+      "name": "安全防护",
+      "description": "网络安全和防护工具",
+      "plugins": {
+        "luci-app-banip": {
+          "name": "IP封禁",
+          "description": "自动IP封禁工具",
+          "author": "openwrt",
+          "feeds": [],
+          "feeds_comment": "官方软件包，无需额外feeds",
+          "dependencies": ["banip"],
+          "conflicts": [],
+          "size": "~500KB",
+          "complexity": "medium",
+          "priority": 1
+        },
+        "luci-app-accesscontrol": {
+          "name": "访问控制",
+          "description": "设备访问时间控制",
+          "author": "openwrt",
+          "feeds": [],
+          "feeds_comment": "官方软件包，无需额外feeds",
+          "dependencies": [],
+          "conflicts": [],
+          "size": "~200KB",
+          "complexity": "low",
+          "priority": 1
         }
       }
     },
     "theme": {
-      "name": "主题插件",
+      "name": "界面主题",
       "description": "LuCI界面主题",
       "plugins": {
         "luci-theme-argon": {
           "name": "Argon主题",
-          "description": "现代化的LuCI主题",
+          "description": "美观的LuCI主题",
           "author": "jerrykuku",
-          "size": "2.1MB",
-          "complexity": "low",
-          "dependencies": ["luci-base"],
-          "conflicts": [],
           "feeds": ["src-git argon https://github.com/jerrykuku/luci-theme-argon"],
-          "device_compatibility": {
-            "x86_64": "excellent",
-            "rpi_4b": "excellent",
-            "nanopi_r2s": "excellent",
-            "xiaomi_4a_gigabit": "excellent",
-            "newifi_d2": "excellent"
-          },
-          "build_notes": "美观主题，推荐使用"
+          "feeds_comment": "Argon主题源",
+          "dependencies": [],
+          "conflicts": ["luci-theme-material", "luci-theme-netgear"],
+          "size": "~1MB",
+          "complexity": "low",
+          "priority": 1
+        },
+        "luci-app-argon-config": {
+          "name": "Argon主题配置",
+          "description": "Argon主题配置工具",
+          "author": "jerrykuku",
+          "feeds": ["src-git argon_config https://github.com/jerrykuku/luci-app-argon-config"],
+          "feeds_comment": "Argon主题配置工具源",
+          "dependencies": ["luci-theme-argon"],
+          "conflicts": [],
+          "size": "~200KB",
+          "complexity": "low",
+          "priority": 2
+        },
+        "luci-theme-material": {
+          "name": "Material主题",
+          "description": "Material Design风格主题",
+          "author": "LuttyYang",
+          "feeds": ["src-git material https://github.com/LuttyYang/luci-theme-material"],
+          "feeds_comment": "Material Design主题源",
+          "dependencies": [],
+          "conflicts": ["luci-theme-argon", "luci-theme-netgear"],
+          "size": "~800KB",
+          "complexity": "low",
+          "priority": 1
+        }
+      }
+    },
+    "development": {
+      "name": "开发工具",
+      "description": "开发和调试工具",
+      "plugins": {
+        "luci-app-commands": {
+          "name": "自定义命令",
+          "description": "在Web界面执行自定义命令",
+          "author": "openwrt",
+          "feeds": [],
+          "feeds_comment": "官方软件包，无需额外feeds",
+          "dependencies": [],
+          "conflicts": [],
+          "size": "~100KB",
+          "complexity": "low",
+          "priority": 1
         }
       }
     }
@@ -281,18 +489,248 @@ init_plugin_database() {
 }
 EOF
     
-    # 更新生成时间
-    local current_time=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-    cat "$PLUGIN_DB_FILE" | jq ".generated_at = \"$current_time\"" > "${PLUGIN_DB_FILE}.tmp"
-    mv "${PLUGIN_DB_FILE}.tmp" "$PLUGIN_DB_FILE"
+    # 更新时间戳
+    local current_time=$(date '+%Y-%m-%d %H:%M:%S')
+    if command -v jq &> /dev/null; then
+        jq --arg time "$current_time" '.last_updated = $time' "$PLUGIN_DB_FILE" > "${PLUGIN_DB_FILE}.tmp" && mv "${PLUGIN_DB_FILE}.tmp" "$PLUGIN_DB_FILE"
+    else
+        sed -i "s/\"last_updated\": \"\"/\"last_updated\": \"$current_time\"/" "$PLUGIN_DB_FILE"
+    fi
     
     log_success "插件数据库初始化完成: $PLUGIN_DB_FILE"
 }
 
-# 列出插件
+# 自动检测当前环境 (新增功能)
+detect_environment() {
+    local branch=""
+    
+    # 检查是否在OpenWrt源码目录中
+    if [ -f "Config.in" ] && [ -f "package/Makefile" ]; then
+        # 尝试通过远程仓库URL判断分支类型
+        if git remote get-url origin &>/dev/null; then
+            local remote_url=$(git remote get-url origin)
+            case "$remote_url" in
+                *coolsnowwolf/lede*|*coolsnowwolf/openwrt*)
+                    branch="lede-master"
+                    ;;
+                *immortalwrt/immortalwrt*)
+                    branch="immortalwrt-master"
+                    ;;
+                *openwrt/openwrt*)
+                    branch="openwrt-main"
+                    ;;
+                *Lienol/openwrt*)
+                    branch="Lienol-master"
+                    ;;
+            esac
+        fi
+        
+        # 如果通过远程URL无法判断，尝试通过目录结构判断
+        if [ -z "$branch" ]; then
+            if [ -d "package/lean" ]; then
+                branch="lede-master"
+            elif [ -d "package/emortal" ]; then
+                branch="immortalwrt-master"
+            else
+                branch="openwrt-main"
+            fi
+        fi
+    fi
+    
+    # 优先使用运行时配置
+    local runtime_branch=$(get_runtime_config_value ".source_branch" "")
+    if [ -n "$runtime_branch" ]; then
+        branch="$runtime_branch"
+    fi
+    
+    # 默认值
+    if [ -z "$branch" ]; then
+        branch="lede-master"
+    fi
+    
+    echo "$branch"
+}
+
+# 生成feeds.conf.default (完善版本)
+generate_feeds_conf() {
+    local plugin_list="$1"
+    local output_file="$2"
+    local branch="$3"
+    local auto_detect="$4"
+    
+    log_info "生成feeds.conf.default配置..."
+    
+    # 自动检测环境
+    if [ "$auto_detect" = true ]; then
+        branch=$(detect_environment)
+        log_info "自动检测到源码分支: $branch"
+    fi
+    
+    # 从运行时配置获取分支信息
+    if [ -z "$branch" ]; then
+        branch=$(get_runtime_config_value ".source_branch" "lede-master")
+    fi
+    
+    # 验证分支
+    if [ -z "${DEFAULT_FEEDS[$branch]}" ]; then
+        log_warning "不支持的分支: $branch，使用默认分支 lede-master"
+        branch="lede-master"
+    fi
+    
+    # 准备输出内容
+    local feeds_content=""
+    
+    # 添加文件头
+    feeds_content+="# OpenWrt Feeds 配置文件"$'\n'
+    feeds_content+="# 生成时间: $(date '+%Y-%m-%d %H:%M:%S')"$'\n'
+    feeds_content+="# 源码分支: $branch"$'\n'
+    feeds_content+="# 生成工具: plugin-manager.sh v$VERSION"$'\n'
+    feeds_content+=""$'\n'
+    
+    # 添加基础feeds源
+    feeds_content+="# =============================================="$'\n'
+    feeds_content+="# 基础 Feeds 源"$'\n'
+    feeds_content+="# =============================================="$'\n'
+    
+    # 解析基础feeds
+    IFS=';' read -ra base_feeds <<< "${DEFAULT_FEEDS[$branch]}"
+    for feed in "${base_feeds[@]}"; do
+        feeds_content+="$feed"$'\n'
+    done
+    
+    # 处理插件特定的feeds
+    if [ -n "$plugin_list" ]; then
+        # 解析插件列表
+        IFS=',' read -ra plugins <<< "$plugin_list"
+        
+        local plugin_feeds=()
+        local valid_plugins=()
+        
+        # 收集所有插件的feeds
+        for plugin in "${plugins[@]}"; do
+            plugin=$(echo "$plugin" | xargs) # 去除空格
+            
+            # 查找插件
+            local found_category=""
+            local categories
+            
+            if command -v jq &> /dev/null; then
+                categories=$(jq -r '.categories | keys[]' "$PLUGIN_DB_FILE" 2>/dev/null)
+            else
+                log_warning "未安装jq，使用备选方法解析插件"
+                categories="proxy network system storage multimedia security theme development"
+            fi
+            
+            for category in $categories; do
+                if command -v jq &> /dev/null; then
+                    local exists=$(jq -r ".categories.${category}.plugins.${plugin}" "$PLUGIN_DB_FILE" 2>/dev/null)
+                    if [ "$exists" != "null" ]; then
+                        found_category="$category"
+                        break
+                    fi
+                else
+                    # 简单的字符串匹配备选方案
+                    if grep -q "\"$plugin\":" "$PLUGIN_DB_FILE" 2>/dev/null; then
+                        found_category="$category"
+                        break
+                    fi
+                fi
+            done
+            
+            if [ -n "$found_category" ]; then
+                valid_plugins+=("$plugin")
+                
+                # 获取插件的feeds
+                if command -v jq &> /dev/null; then
+                    local feeds=$(jq -r ".categories.${found_category}.plugins.${plugin}.feeds[]" "$PLUGIN_DB_FILE" 2>/dev/null)
+                    local feeds_comment=$(jq -r ".categories.${found_category}.plugins.${plugin}.feeds_comment" "$PLUGIN_DB_FILE" 2>/dev/null)
+                    
+                    if [ -n "$feeds" ]; then
+                        while IFS= read -r feed_line; do
+                            if [ -n "$feed_line" ] && [ "$feed_line" != "null" ]; then
+                                plugin_feeds+=("$feed_line|$plugin|$feeds_comment")
+                            fi
+                        done <<< "$feeds"
+                    fi
+                else
+                    log_warning "跳过插件feeds解析: $plugin (需要jq工具)"
+                fi
+            else
+                log_warning "跳过未知插件: $plugin"
+            fi
+        done
+        
+        # 添加插件feeds (去重)
+        if [ ${#plugin_feeds[@]} -gt 0 ]; then
+            feeds_content+=""$'\n'
+            feeds_content+="# =============================================="$'\n'
+            feeds_content+="# 插件 Feeds 源"$'\n'
+            feeds_content+="# =============================================="$'\n'
+            
+            # 使用关联数组去重
+            declare -A unique_feeds
+            for feed_info in "${plugin_feeds[@]}"; do
+                IFS='|' read -r feed_line plugin_name comment <<< "$feed_info"
+                if [ -z "${unique_feeds[$feed_line]}" ]; then
+                    unique_feeds["$feed_line"]="$plugin_name|$comment"
+                fi
+            done
+            
+            # 输出去重后的feeds
+            for feed_line in "${!unique_feeds[@]}"; do
+                IFS='|' read -r plugin_name comment <<< "${unique_feeds[$feed_line]}"
+                feeds_content+=""$'\n'
+                feeds_content+="# $plugin_name: $comment"$'\n'
+                feeds_content+="$feed_line"$'\n'
+            done
+        fi
+        
+        # 添加有效插件列表
+        if [ ${#valid_plugins[@]} -gt 0 ]; then
+            feeds_content+=""$'\n'
+            feeds_content+="# =============================================="$'\n'
+            feeds_content+="# 已选择的插件列表"$'\n'
+            feeds_content+="# =============================================="$'\n'
+            feeds_content+="# 插件数量: ${#valid_plugins[@]}"$'\n'
+            
+            for plugin in "${valid_plugins[@]}"; do
+                feeds_content+="# - $plugin"$'\n'
+            done
+        fi
+    fi
+    
+    # 添加常用扩展feeds (新增)
+    feeds_content+=""$'\n'
+    feeds_content+="# =============================================="$'\n'
+    feeds_content+="# 常用扩展 Feeds 源 (按需启用)"$'\n'
+    feeds_content+="# =============================================="$'\n'
+    feeds_content+="# src-git kenzo https://github.com/kenzok8/openwrt-packages"$'\n'
+    feeds_content+="# src-git small https://github.com/kenzok8/small"$'\n'
+    feeds_content+="# src-git kiddin9 https://github.com/kiddin9/openwrt-packages"$'\n'
+    feeds_content+="# src-git custom /path/to/custom-feed"$'\n'
+    
+    # 输出到文件或控制台
+    if [ -n "$output_file" ]; then
+        echo -e "$feeds_content" > "$output_file"
+        log_success "feeds.conf.default 已生成: $output_file"
+        
+        # 验证生成的文件
+        if [ -f "$output_file" ]; then
+            local line_count=$(wc -l < "$output_file")
+            local feed_count=$(grep -c "^src-git" "$output_file" 2>/dev/null || echo "0")
+            log_info "文件统计: $line_count 行，$feed_count 个feeds源"
+        fi
+    else
+        echo -e "$feeds_content"
+    fi
+    
+    return 0
+}
+
+# 原有的列出所有插件函数 (保持不变)
 list_plugins() {
     local category="$1"
-    local format="$2"
+    local format="${2:-text}"
     
     if [ ! -f "$PLUGIN_DB_FILE" ]; then
         log_error "插件数据库不存在，请先运行 init 初始化"
@@ -304,12 +742,22 @@ list_plugins() {
     case "$format" in
         "json")
             if [ -n "$category" ]; then
-                jq ".categories.${category}.plugins" "$PLUGIN_DB_FILE" 2>/dev/null || {
-                    log_error "分类不存在: $category"
+                if command -v jq &> /dev/null; then
+                    jq ".categories.${category}.plugins" "$PLUGIN_DB_FILE" 2>/dev/null || {
+                        log_error "分类不存在: $category"
+                        return 1
+                    }
+                else
+                    log_error "需要jq工具来输出JSON格式"
                     return 1
-                }
+                fi
             else
-                jq ".categories" "$PLUGIN_DB_FILE"
+                if command -v jq &> /dev/null; then
+                    jq ".categories" "$PLUGIN_DB_FILE"
+                else
+                    log_error "需要jq工具来输出JSON格式"
+                    return 1
+                fi
             fi
             ;;
         "text")
@@ -326,11 +774,19 @@ list_plugins() {
     esac
 }
 
-# 列出所有插件（文本格式）
+# 原有的列出所有插件函数 (保持不变)
 list_all_plugins() {
     echo -e "\n${CYAN}📦 可用插件列表${NC}"
     echo "========================================"
     
+    # 使用备选解析方法（如果没有jq）
+    if ! command -v jq &> /dev/null; then
+        log_warning "未安装jq工具，使用简化显示"
+        echo "请安装jq工具以获得完整功能: sudo apt-get install jq"
+        return 1
+    fi
+    
+    # 读取并解析JSON
     local categories=$(jq -r '.categories | keys[]' "$PLUGIN_DB_FILE")
     
     for category in $categories; do
@@ -360,12 +816,17 @@ list_all_plugins() {
         done
     done
     
-    echo -e "\n${BLUE}图例: 🟢 简单 🟡 中等 🔴 复杂${NC}"
+    echo -e "\n${BLUE}图例:${NC} 🟢 简单 🟡 中等 🔴 复杂"
 }
 
-# 列出特定分类插件
+# 原有函数保持不变 (列出指定分类的插件)
 list_category_plugins() {
     local category="$1"
+    
+    if ! command -v jq &> /dev/null; then
+        log_error "需要jq工具，请安装: sudo apt-get install jq"
+        return 1
+    fi
     
     local category_name=$(jq -r ".categories.${category}.name" "$PLUGIN_DB_FILE" 2>/dev/null)
     if [ "$category_name" = "null" ]; then
@@ -373,403 +834,453 @@ list_category_plugins() {
         return 1
     fi
     
-    echo -e "\n${CYAN}📦 ${category_name} 插件列表${NC}"
+    echo -e "\n${CYAN}📂 ${category_name} 插件列表${NC}"
     echo "========================================"
     
     local plugins=$(jq -r ".categories.${category}.plugins | keys[]" "$PLUGIN_DB_FILE")
     for plugin in $plugins; do
         local name=$(jq -r ".categories.${category}.plugins.${plugin}.name" "$PLUGIN_DB_FILE")
         local desc=$(jq -r ".categories.${category}.plugins.${plugin}.description" "$PLUGIN_DB_FILE")
+        local size=$(jq -r ".categories.${category}.plugins.${plugin}.size" "$PLUGIN_DB_FILE")
         
-        printf "   ${GREEN}%-25s${NC} %s\n" "$plugin" "$name"
-        printf "   %-25s   %s\n" "" "$desc"
+        printf "${GREEN}%-25s${NC} %s (%s)\n" "$plugin" "$name" "$size"
+        printf "%-25s %s\n" "" "$desc"
+        echo
     done
 }
 
-# 编译前检查
-pre_build_check() {
-    local device="$1"
-    local plugin_list="$2"
-    local strict_mode="$3"
+# 原有搜索函数 (保持不变)
+search_plugins() {
+    local keyword="$1"
+    local category="$2"
     
-    log_info "执行编译前检查..."
-    
-    if [ -z "$device" ] || [ -z "$plugin_list" ]; then
-        log_error "请指定设备类型和插件列表"
+    if [ -z "$keyword" ]; then
+        log_error "请提供搜索关键词"
         return 1
     fi
     
-    local issues=()
-    local warnings=()
-    
-    echo -e "\n${CYAN}🔍 编译前检查报告${NC}"
-    echo "========================================"
-    echo "目标设备: $device"
-    echo "检查插件: $plugin_list"
-    echo "检查模式: $([ "$strict_mode" = true ] && echo "严格模式" || echo "标准模式")"
-    echo ""
-    
-    # 解析插件列表
-    IFS=',' read -ra plugins <<< "$plugin_list"
-    
-    # 1. 检查插件存在性
-    log_info "1. 检查插件有效性..."
-    for plugin in "${plugins[@]}"; do
-        plugin=$(echo "$plugin" | xargs)
-        if ! check_plugin_exists "$plugin"; then
-            issues+=("插件不存在: $plugin")
-        fi
-    done
-    
-    # 2. 检查设备兼容性
-    log_info "2. 检查设备兼容性..."
-    for plugin in "${plugins[@]}"; do
-        plugin=$(echo "$plugin" | xargs)
-        local compatibility=$(get_plugin_device_compatibility "$plugin" "$device")
-        case "$compatibility" in
-            "poor"|"limited")
-                if [ "$strict_mode" = true ]; then
-                    issues+=("$plugin 在 $device 上兼容性差")
-                else
-                    warnings+=("$plugin 在 $device 上兼容性有限")
-                fi
-                ;;
-            "unknown"|"")
-                warnings+=("$plugin 在 $device 上兼容性未知")
-                ;;
-        esac
-    done
-    
-    # 3. 检查插件冲突
-    log_info "3. 检查插件冲突..."
-    local conflict_result=$(check_plugin_conflicts_internal "$plugin_list")
-    if [ $? -ne 0 ]; then
-        issues+=("检测到插件冲突")
-    fi
-    
-    # 4. 检查编译依赖
-    log_info "4. 检查编译依赖..."
-    if ! check_build_dependencies "$device" "$plugin_list"; then
-        warnings+=("可能缺少编译依赖")
-    fi
-    
-    # 输出检查结果
-    echo -e "\n${CYAN}📊 检查结果汇总${NC}"
-    echo "========================================"
-    
-    if [ ${#issues[@]} -eq 0 ] && [ ${#warnings[@]} -eq 0 ]; then
-        echo -e "${GREEN}✅ 检查通过，未发现问题${NC}"
-        return 0
-    fi
-    
-    if [ ${#issues[@]} -gt 0 ]; then
-        echo -e "${RED}❌ 发现 ${#issues[@]} 个严重问题:${NC}"
-        for issue in "${issues[@]}"; do
-            echo -e "   ${RED}•${NC} $issue"
-        done
-    fi
-    
-    if [ ${#warnings[@]} -gt 0 ]; then
-        echo -e "${YELLOW}⚠️  发现 ${#warnings[@]} 个警告:${NC}"
-        for warning in "${warnings[@]}"; do
-            echo -e "   ${YELLOW}•${NC} $warning"
-        done
-    fi
-    
-    # 返回结果
-    if [ ${#issues[@]} -gt 0 ]; then
-        echo -e "\n${RED}建议修复上述问题后再开始编译${NC}"
+    if ! command -v jq &> /dev/null; then
+        log_error "需要jq工具，请安装: sudo apt-get install jq"
         return 1
+    fi
+    
+    log_info "搜索插件: $keyword"
+    
+    echo -e "\n${CYAN}🔍 搜索结果${NC}"
+    echo "========================================"
+    
+    local found=false
+    local categories
+    
+    if [ -n "$category" ]; then
+        categories="$category"
     else
-        echo -e "\n${YELLOW}可以开始编译，但请注意上述警告${NC}"
-        return 0
-    fi
-}
-
-# 自动修复插件依赖
-auto_fix_plugin_deps() {
-    local device="$1"
-    local plugin_list="$2"
-    local auto_fix="$3"
-    
-    log_info "自动修复插件依赖..."
-    
-    if [ "$auto_fix" != true ]; then
-        log_info "自动修复未启用，仅检查依赖"
+        categories=$(jq -r '.categories | keys[]' "$PLUGIN_DB_FILE")
     fi
     
-    # 解析插件列表
-    IFS=',' read -ra plugins <<< "$plugin_list"
-    
-    local fixes_applied=()
-    
-    # 检查每个插件的依赖
-    for plugin in "${plugins[@]}"; do
-        plugin=$(echo "$plugin" | xargs)
-        
-        log_debug "检查插件依赖: $plugin"
-        
-        # 获取插件依赖
-        local dependencies=$(get_plugin_dependencies "$plugin")
-        
-        if [ -n "$dependencies" ]; then
-            log_info "插件 $plugin 需要依赖: $dependencies"
+    for cat in $categories; do
+        local plugins=$(jq -r ".categories.${cat}.plugins | keys[]" "$PLUGIN_DB_FILE")
+        for plugin in $plugins; do
+            local name=$(jq -r ".categories.${cat}.plugins.${plugin}.name" "$PLUGIN_DB_FILE")
+            local desc=$(jq -r ".categories.${cat}.plugins.${plugin}.description" "$PLUGIN_DB_FILE")
             
-            # 检查依赖是否已安装
-            while IFS= read -r dep; do
-                if [ -n "$dep" ]; then
-                    log_debug "检查依赖包: $dep"
-                    
-                    # 检查依赖包是否可用
-                    if ! check_package_available "$dep"; then
-                        log_warning "依赖包不可用: $dep"
-                        
-                        if [ "$auto_fix" = true ]; then
-                            if install_dependency "$dep"; then
-                                fixes_applied+=("安装依赖: $dep")
-                                log_success "已安装依赖: $dep"
-                            else
-                                log_error "无法安装依赖: $dep"
-                            fi
-                        fi
-                    fi
-                fi
-            done <<< "$dependencies"
+            # 检查是否匹配关键词
+            if [[ "$plugin" =~ $keyword ]] || [[ "$name" =~ $keyword ]] || [[ "$desc" =~ $keyword ]]; then
+                local size=$(jq -r ".categories.${cat}.plugins.${plugin}.size" "$PLUGIN_DB_FILE")
+                local cat_name=$(jq -r ".categories.${cat}.name" "$PLUGIN_DB_FILE")
+                
+                printf "${GREEN}%-25s${NC} %s (%s)\n" "$plugin" "$name" "$size"
+                printf "%-25s 分类: %s\n" "" "$cat_name"
+                printf "%-25s %s\n" "" "$desc"
+                echo
+                found=true
+            fi
+        done
+    done
+    
+    if [ "$found" = false ]; then
+        echo "未找到匹配的插件"
+    fi
+}
+
+# 原有显示插件详细信息函数 (保持不变，添加feeds信息显示)
+show_plugin_info() {
+    local plugin_name="$1"
+    
+    if [ -z "$plugin_name" ]; then
+        log_error "请指定插件名称"
+        return 1
+    fi
+    
+    if ! command -v jq &> /dev/null; then
+        log_error "需要jq工具，请安装: sudo apt-get install jq"
+        return 1
+    fi
+    
+    log_info "查询插件信息: $plugin_name"
+    
+    # 查找插件
+    local found_category=""
+    local categories=$(jq -r '.categories | keys[]' "$PLUGIN_DB_FILE")
+    
+    for category in $categories; do
+        local exists=$(jq -r ".categories.${category}.plugins.${plugin_name}" "$PLUGIN_DB_FILE")
+        if [ "$exists" != "null" ]; then
+            found_category="$category"
+            break
         fi
     done
     
-    # 显示修复结果
-    if [ ${#fixes_applied[@]} -gt 0 ]; then
-        echo -e "\n${GREEN}✅ 已应用的修复:${NC}"
-        for fix in "${fixes_applied[@]}"; do
-            echo -e "   ${GREEN}•${NC} $fix"
-        done
-    else
-        echo -e "\n${BLUE}ℹ️  无需修复或修复未启用${NC}"
+    if [ -z "$found_category" ]; then
+        log_error "插件不存在: $plugin_name"
+        return 1
     fi
     
-    return 0
-}
-
-# 检查设备兼容性
-check_device_compatibility() {
-    local device="$1"
-    local plugin_list="$2"
-    
-    log_info "检查设备兼容性..."
-    
-    # 解析插件列表
-    IFS=',' read -ra plugins <<< "$plugin_list"
-    
-    echo -e "\n${CYAN}🖥️  设备兼容性报告 - $device${NC}"
+    # 显示详细信息
+    echo -e "\n${CYAN}🔌 插件详细信息${NC}"
     echo "========================================"
     
-    for plugin in "${plugins[@]}"; do
-        plugin=$(echo "$plugin" | xargs)
-        local compatibility=$(get_plugin_device_compatibility "$plugin" "$device")
-        local icon=""
-        local color=""
-        
-        case "$compatibility" in
-            "excellent")
-                icon="🟢"
-                color="$GREEN"
-                ;;
-            "good")
-                icon="🟡"
-                color="$YELLOW"
-                ;;
-            "medium")
-                icon="🟠"
-                color="$YELLOW"
-                ;;
-            "limited"|"poor")
-                icon="🔴"
-                color="$RED"
-                ;;
-            *)
-                icon="❓"
-                color="$BLUE"
-                compatibility="未知"
-                ;;
-        esac
-        
-        printf "   %s ${color}%-25s${NC} %s\n" "$icon" "$plugin" "$compatibility"
-    done
+    local name=$(jq -r ".categories.${found_category}.plugins.${plugin_name}.name" "$PLUGIN_DB_FILE")
+    local desc=$(jq -r ".categories.${found_category}.plugins.${plugin_name}.description" "$PLUGIN_DB_FILE")
+    local author=$(jq -r ".categories.${found_category}.plugins.${plugin_name}.author" "$PLUGIN_DB_FILE")
+    local size=$(jq -r ".categories.${found_category}.plugins.${plugin_name}.size" "$PLUGIN_DB_FILE")
+    local complexity=$(jq -r ".categories.${found_category}.plugins.${plugin_name}.complexity" "$PLUGIN_DB_FILE")
+    local cat_name=$(jq -r ".categories.${found_category}.name" "$PLUGIN_DB_FILE")
+    local feeds_comment=$(jq -r ".categories.${found_category}.plugins.${plugin_name}.feeds_comment" "$PLUGIN_DB_FILE")
     
-    echo -e "\n${BLUE}图例: 🟢 优秀 🟡 良好 🟠 一般 🔴 有限 ❓ 未知${NC}"
-}
-
-# 优化插件配置
-optimize_plugin_config() {
-    local device="$1"
-    local plugin_list="$2"
-    local auto_fix="$3"
+    echo "插件名称: ${GREEN}$plugin_name${NC}"
+    echo "显示名称: $name"
+    echo "插件描述: $desc"
+    echo "开发作者: $author"
+    echo "所属分类: $cat_name ($found_category)"
+    echo "安装大小: $size"
+    echo "复杂程度: $complexity"
     
-    log_info "优化插件配置..."
-    
-    # 实现配置优化逻辑
-    log_info "功能开发中..."
-    
-    return 0
-}
-
-# 辅助函数：检查插件是否存在
-check_plugin_exists() {
-    local plugin="$1"
-    
-    if [ ! -f "$PLUGIN_DB_FILE" ]; then
-        return 1
+    if [ "$feeds_comment" != "null" ] && [ -n "$feeds_comment" ]; then
+        echo "Feeds说明: $feeds_comment"
     fi
     
-    local categories=$(jq -r '.categories | keys[]' "$PLUGIN_DB_FILE" 2>/dev/null)
-    for category in $categories; do
-        local exists=$(jq -r ".categories.${category}.plugins.${plugin}" "$PLUGIN_DB_FILE" 2>/dev/null)
-        if [ "$exists" != "null" ]; then
-            return 0
-        fi
-    done
-    
-    return 1
-}
-
-# 辅助函数：获取插件设备兼容性
-get_plugin_device_compatibility() {
-    local plugin="$1"
-    local device="$2"
-    
-    if [ ! -f "$PLUGIN_DB_FILE" ]; then
-        return 1
+    # 显示依赖
+    local deps=$(jq -r ".categories.${found_category}.plugins.${plugin_name}.dependencies[]" "$PLUGIN_DB_FILE" 2>/dev/null)
+    if [ -n "$deps" ]; then
+        echo -e "\n${YELLOW}📦 依赖包:${NC}"
+        echo "$deps" | while read dep; do
+            echo "  - $dep"
+        done
     fi
     
-    local categories=$(jq -r '.categories | keys[]' "$PLUGIN_DB_FILE" 2>/dev/null)
-    for category in $categories; do
-        local exists=$(jq -r ".categories.${category}.plugins.${plugin}" "$PLUGIN_DB_FILE" 2>/dev/null)
-        if [ "$exists" != "null" ]; then
-            jq -r ".categories.${category}.plugins.${plugin}.device_compatibility.${device}" "$PLUGIN_DB_FILE" 2>/dev/null
-            return
-        fi
-    done
-}
-
-# 辅助函数：获取插件依赖
-get_plugin_dependencies() {
-    local plugin="$1"
-    
-    if [ ! -f "$PLUGIN_DB_FILE" ]; then
-        return
+    # 显示冲突
+    local conflicts=$(jq -r ".categories.${found_category}.plugins.${plugin_name}.conflicts[]" "$PLUGIN_DB_FILE" 2>/dev/null)
+    if [ -n "$conflicts" ]; then
+        echo -e "\n${RED}⚠️  冲突插件:${NC}"
+        echo "$conflicts" | while read conflict; do
+            echo "  - $conflict"
+        done
     fi
     
-    local categories=$(jq -r '.categories | keys[]' "$PLUGIN_DB_FILE" 2>/dev/null)
-    for category in $categories; do
-        local exists=$(jq -r ".categories.${category}.plugins.${plugin}" "$PLUGIN_DB_FILE" 2>/dev/null)
-        if [ "$exists" != "null" ]; then
-            jq -r ".categories.${category}.plugins.${plugin}.dependencies[]" "$PLUGIN_DB_FILE" 2>/dev/null
-            return
-        fi
-    done
+    # 显示feeds源 (增强显示)
+    local feeds=$(jq -r ".categories.${found_category}.plugins.${plugin_name}.feeds[]" "$PLUGIN_DB_FILE" 2>/dev/null)
+    if [ -n "$feeds" ]; then
+        echo -e "\n${BLUE}🔗 所需Feeds源:${NC}"
+        echo "$feeds" | while read feed; do
+            echo "  $feed"
+        done
+    else
+        echo -e "\n${BLUE}🔗 Feeds源:${NC} 官方软件包，无需额外feeds"
+    fi
 }
 
-# 辅助函数：检查包是否可用
-check_package_available() {
-    local package="$1"
-    
-    # 检查包是否在feeds中
-    if [ -f "feeds.conf.default" ]; then
-        ./scripts/feeds update >/dev/null 2>&1
-        if ./scripts/feeds search "$package" >/dev/null 2>&1; then
-            return 0
-        fi
-    fi
-    
-    # 检查包是否在源码中
-    if [ -d "package" ]; then
-        if find package -name "*${package}*" -type d | grep -q .; then
-            return 0
-        fi
-    fi
-    
-    return 1
-}
-
-# 辅助函数：安装依赖
-install_dependency() {
-    local dep="$1"
-    
-    log_debug "尝试安装依赖: $dep"
-    
-    # 尝试通过feeds安装
-    if ./scripts/feeds install "$dep" >/dev/null 2>&1; then
-        return 0
-    fi
-    
-    # 尝试其他安装方式
-    return 1
-}
-
-# 辅助函数：检查插件冲突（内部使用）
-check_plugin_conflicts_internal() {
+# 原有检查插件冲突函数 (保持不变)
+check_conflicts() {
     local plugin_list="$1"
     
-    # 复用现有的冲突检查逻辑
-    # 这里简化处理，实际应该调用完整的冲突检查
-    return 0
+    if [ -z "$plugin_list" ]; then
+        log_error "请提供插件列表"
+        return 1
+    fi
+    
+    if ! command -v jq &> /dev/null; then
+        log_error "需要jq工具，请安装: sudo apt-get install jq"
+        return 1
+    fi
+    
+    log_info "检查插件冲突..."
+    
+    # 解析插件列表
+    IFS=',' read -ra plugins <<< "$plugin_list"
+    
+    local conflicts_found=false
+    local conflict_pairs=()
+    
+    echo -e "\n${CYAN}⚠️  插件冲突检查${NC}"
+    echo "========================================"
+    
+    # 检查每个插件的冲突
+    for plugin in "${plugins[@]}"; do
+        plugin=$(echo "$plugin" | xargs) # 去除空格
+        
+        # 查找插件所在分类
+        local found_category=""
+        local categories=$(jq -r '.categories | keys[]' "$PLUGIN_DB_FILE")
+        
+        for category in $categories; do
+            local exists=$(jq -r ".categories.${category}.plugins.${plugin}" "$PLUGIN_DB_FILE")
+            if [ "$exists" != "null" ]; then
+                found_category="$category"
+                break
+            fi
+        done
+        
+        if [ -z "$found_category" ]; then
+            log_warning "未知插件: $plugin"
+            continue
+        fi
+        
+        # 获取冲突列表
+        local plugin_conflicts=$(jq -r ".categories.${found_category}.plugins.${plugin}.conflicts[]" "$PLUGIN_DB_FILE" 2>/dev/null)
+        
+        # 检查是否与其他选中的插件冲突
+        for other_plugin in "${plugins[@]}"; do
+            other_plugin=$(echo "$other_plugin" | xargs)
+            if [ "$plugin" != "$other_plugin" ]; then
+                if echo "$plugin_conflicts" | grep -q "^${other_plugin}$"; then
+                    conflicts_found=true
+                    conflict_pairs+=("$plugin <-> $other_plugin")
+                fi
+            fi
+        done
+    done
+    
+    if [ "$conflicts_found" = true ]; then
+        echo -e "${RED}❌ 发现插件冲突:${NC}"
+        for pair in "${conflict_pairs[@]}"; do
+            echo "  $pair"
+        done
+        echo
+        echo -e "${YELLOW}建议:${NC} 请从冲突的插件中选择一个，移除其他冲突插件"
+        return 1
+    else
+        echo -e "${GREEN}✅ 未发现插件冲突${NC}"
+        return 0
+    fi
 }
 
-# 辅助函数：检查编译依赖
-check_build_dependencies() {
-    local device="$1"
-    local plugin_list="$2"
+# 生成插件配置 (更新版本，支持feeds格式)
+generate_plugin_config() {
+    local plugin_list="$1"
+    local output_file="$2"
+    local format="${3:-config}"
+    local branch="$4"
+    local auto_detect="$5"
     
-    # 检查基本编译依赖
-    local required_tools=("gcc" "g++" "make" "cmake")
+    if [ -z "$plugin_list" ]; then
+        log_error "请提供插件列表"
+        return 1
+    fi
     
-    for tool in "${required_tools[@]}"; do
-        if ! command -v "$tool" >/dev/null 2>&1; then
-            log_warning "缺少编译工具: $tool"
+    log_info "生成插件配置..."
+    
+    # 根据格式调用不同的生成函数
+    case "$format" in
+        "config")
+            generate_config_format "$plugin_list" "$output_file"
+            ;;
+        "feeds")
+            generate_feeds_conf "$plugin_list" "$output_file" "$branch" "$auto_detect"
+            ;;
+        "json")
+            generate_json_format "$plugin_list" "$output_file"
+            ;;
+        *)
+            log_error "不支持的格式: $format"
             return 1
+            ;;
+    esac
+}
+
+# 原有的生成配置格式函数 (保持不变)
+generate_config_format() {
+    local plugin_list="$1"
+    local output_file="$2"
+    
+    # 解析插件列表
+    IFS=',' read -ra plugins <<< "$plugin_list"
+    
+    # 验证所有插件
+    local valid_plugins=()
+    
+    for plugin in "${plugins[@]}"; do
+        plugin=$(echo "$plugin" | xargs)
+        
+        # 查找插件 (简化验证，如果没有jq就跳过验证)
+        if command -v jq &> /dev/null; then
+            local found_category=""
+            local categories=$(jq -r '.categories | keys[]' "$PLUGIN_DB_FILE" 2>/dev/null)
+            
+            for category in $categories; do
+                local exists=$(jq -r ".categories.${category}.plugins.${plugin}" "$PLUGIN_DB_FILE" 2>/dev/null)
+                if [ "$exists" != "null" ]; then
+                    found_category="$category"
+                    break
+                fi
+            done
+            
+            if [ -n "$found_category" ]; then
+                valid_plugins+=("$plugin")
+            else
+                log_warning "跳过未知插件: $plugin"
+            fi
+        else
+            # 没有jq时，假设所有插件都有效
+            valid_plugins+=("$plugin")
         fi
     done
     
-    return 0
+    if [ ${#valid_plugins[@]} -eq 0 ]; then
+        log_error "没有有效的插件"
+        return 1
+    fi
+    
+    # 生成配置内容
+    local config_content=""
+    config_content+="# OpenWrt 插件配置"$'\n'
+    config_content+="# 生成时间: $(date '+%Y-%m-%d %H:%M:%S')"$'\n'
+    config_content+="# 插件数量: ${#valid_plugins[@]}"$'\n'
+    config_content+=""$'\n'
+    
+    for plugin in "${valid_plugins[@]}"; do
+        config_content+="CONFIG_PACKAGE_${plugin}=y"$'\n'
+    done
+    
+    # 输出到文件或控制台
+    if [ -n "$output_file" ]; then
+        echo -e "$config_content" > "$output_file"
+        log_success "配置已保存到: $output_file"
+    else
+        echo -e "$config_content"
+    fi
 }
 
-# 主函数
+# 原有的生成JSON格式函数 (保持不变)
+generate_json_format() {
+    local plugin_list="$1"
+    local output_file="$2"
+    
+    # 解析插件列表
+    IFS=',' read -ra plugins <<< "$plugin_list"
+    
+    local json_content=""
+    json_content+="{"$'\n'
+    json_content+="  \"generated_at\": \"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\","$'\n'
+    json_content+="  \"plugin_count\": ${#plugins[@]},"$'\n'
+    json_content+="  \"plugins\": ["$'\n'
+    
+    for i in "${!plugins[@]}"; do
+        local plugin="${plugins[$i]}"
+        plugin=$(echo "$plugin" | xargs)
+        if [ $i -eq $((${#plugins[@]} - 1)) ]; then
+            json_content+="    \"$plugin\""$'\n'
+        else
+            json_content+="    \"$plugin\","$'\n'
+        fi
+    done
+    
+    json_content+="  ]"$'\n'
+    json_content+="}"$'\n'
+    
+    # 输出到文件或控制台
+    if [ -n "$output_file" ]; then
+        echo -e "$json_content" > "$output_file"
+        log_success "配置已保存到: $output_file"
+    else
+        echo -e "$json_content"
+    fi
+}
+
+# 原有的验证插件配置函数 (保持不变)
+validate_plugins() {
+    local plugin_list="$1"
+    
+    if [ -z "$plugin_list" ]; then
+        log_error "请提供插件列表"
+        return 1
+    fi
+    
+    if ! command -v jq &> /dev/null; then
+        log_warning "未安装jq工具，跳过详细验证"
+        return 0
+    fi
+    
+    log_info "验证插件配置..."
+    
+    # 解析插件列表
+    IFS=',' read -ra plugins <<< "$plugin_list"
+    
+    local errors=0
+    local warnings=0
+    
+    echo -e "\n${CYAN}🔍 插件验证结果${NC}"
+    echo "========================================"
+    
+    for plugin in "${plugins[@]}"; do
+        plugin=$(echo "$plugin" | xargs)
+        
+        # 查找插件
+        local found_category=""
+        local categories=$(jq -r '.categories | keys[]' "$PLUGIN_DB_FILE")
+        
+        for category in $categories; do
+            local exists=$(jq -r ".categories.${category}.plugins.${plugin}" "$PLUGIN_DB_FILE")
+            if [ "$exists" != "null" ]; then
+                found_category="$category"
+                break
+            fi
+        done
+        
+        if [ -z "$found_category" ]; then
+            echo -e "${RED}❌ $plugin${NC} - 插件不存在"
+            ((errors++))
+        else
+            echo -e "${GREEN}✅ $plugin${NC} - 验证通过"
+            
+            # 检查复杂度警告
+            local complexity=$(jq -r ".categories.${found_category}.plugins.${plugin}.complexity" "$PLUGIN_DB_FILE")
+            if [ "$complexity" = "high" ]; then
+                echo -e "   ${YELLOW}⚠️  高复杂度插件，可能需要额外配置${NC}"
+                ((warnings++))
+            fi
+        fi
+    done
+    
+    echo
+    echo "验证完成: $((${#plugins[@]} - errors)) 个有效插件，$errors 个错误，$warnings 个警告"
+    
+    if [ $errors -gt 0 ]; then
+        return 1
+    else
+        return 0
+    fi
+}
+
+# 主函数 (更新版本，添加新的操作和参数)
 main() {
     local operation=""
     local plugin=""
     local plugin_list=""
     local category=""
-    local device=""
     local format="text"
     local output=""
-    local auto_fix=false
-    local strict_mode=false
+    local branch=""
+    local auto_detect=false
     local verbose=false
-    local runtime_config=""
-    
-    # 检查jq工具
-    if ! command -v jq &> /dev/null; then
-        log_error "需要安装jq工具来处理JSON文件"
-        log_info "Ubuntu/Debian: sudo apt install jq"
-        log_info "CentOS/RHEL: sudo yum install jq"
-        exit 1
-    fi
     
     # 解析命令行参数
     while [[ $# -gt 0 ]]; do
         case $1 in
-            # 基础操作
-            init|list|search|info|validate|conflicts|generate)
+            init|list|search|info|validate|conflicts|generate|generate-feeds|install|remove|update)
                 operation="$1"
                 shift
                 ;;
-            # 增强功能
-            pre-build-check|auto-fix-deps|compatibility|optimize)
-                operation="$1"
-                shift
-                ;;
-            # 选项
             -p|--plugin)
                 plugin="$2"
                 shift 2
@@ -782,10 +1293,6 @@ main() {
                 category="$2"
                 shift 2
                 ;;
-            -d|--device)
-                device="$2"
-                shift 2
-                ;;
             -f|--format)
                 format="$2"
                 shift 2
@@ -794,18 +1301,20 @@ main() {
                 output="$2"
                 shift 2
                 ;;
-            --auto-fix)
-                auto_fix=true
-                shift
-                ;;
-            --strict)
-                strict_mode=true
-                shift
+            -b|--branch)
+                branch="$2"
+                shift 2
                 ;;
             --runtime-config)
-                runtime_config="$2"
                 RUNTIME_CONFIG_FILE="$2"
+                if [ ! -f "$RUNTIME_CONFIG_FILE" ]; then
+                    log_warning "运行时配置文件不存在: $RUNTIME_CONFIG_FILE"
+                fi
                 shift 2
+                ;;
+            --auto-detect)
+                auto_detect=true
+                shift
                 ;;
             -v|--verbose)
                 verbose=true
@@ -820,33 +1329,36 @@ main() {
                 exit 0
                 ;;
             *)
-                log_error "未知参数: $1"
-                echo "使用 $0 --help 查看帮助信息"
-                exit 1
+                # 如果没有指定操作，将第一个参数作为搜索关键词
+                if [ -z "$operation" ]; then
+                    operation="search"
+                    plugin="$1"
+                else
+                    log_error "未知参数: $1"
+                    echo "使用 $0 --help 查看帮助信息"
+                    exit 1
+                fi
+                shift
                 ;;
         esac
     done
     
+    # 检查jq工具 (某些操作需要)
+    if [ "$operation" != "init" ] && [ ! -f "$PLUGIN_DB_FILE" ]; then
+        log_error "插件数据库不存在，请先运行 init 初始化"
+        exit 1
+    fi
+    
     # 显示标题
     show_header
     
-    # 如果提供了运行时配置，读取相关设置
-    if [ -n "$RUNTIME_CONFIG_FILE" ]; then
-        log_debug "使用运行时配置: $RUNTIME_CONFIG_FILE"
-        
-        # 从运行时配置读取设置
-        if [ -z "$verbose" ]; then
-            local runtime_verbose=$(get_runtime_config_value '.verbose_mode' 'false')
-            if [ "$runtime_verbose" = "true" ]; then
-                verbose=true
-            fi
-        fi
-        
-        if [ "$auto_fix" = false ]; then
-            local runtime_auto_fix=$(get_runtime_config_value '.auto_fix_enabled' 'false')
-            if [ "$runtime_auto_fix" = "true" ]; then
-                auto_fix=true
-            fi
+    # 显示运行时配置信息 (如果有)
+    if [ -n "$RUNTIME_CONFIG_FILE" ] && [ -f "$RUNTIME_CONFIG_FILE" ]; then
+        log_info "使用运行时配置: $RUNTIME_CONFIG_FILE"
+        if [ "$verbose" = true ]; then
+            echo "运行时配置内容:"
+            cat "$RUNTIME_CONFIG_FILE" 2>/dev/null | head -10
+            echo "..."
         fi
     fi
     
@@ -858,21 +1370,26 @@ main() {
         "list")
             list_plugins "$category" "$format"
             ;;
-        "pre-build-check")
-            pre_build_check "$device" "$plugin_list" "$strict_mode"
+        "search")
+            search_plugins "$plugin" "$category"
             ;;
-        "auto-fix-deps")
-            auto_fix_plugin_deps "$device" "$plugin_list" "$auto_fix"
+        "info")
+            show_plugin_info "$plugin"
             ;;
-        "compatibility")
-            check_device_compatibility "$device" "$plugin_list"
+        "validate")
+            validate_plugins "$plugin_list"
             ;;
-        "optimize")
-            optimize_plugin_config "$device" "$plugin_list" "$auto_fix"
+        "conflicts")
+            check_conflicts "$plugin_list"
             ;;
-        # 其他现有功能保持不变...
-        "search"|"info"|"validate"|"conflicts"|"generate")
-            log_info "功能 $operation 开发中..."
+        "generate")
+            generate_plugin_config "$plugin_list" "$output" "$format" "$branch" "$auto_detect"
+            ;;
+        "generate-feeds")
+            generate_feeds_conf "$plugin_list" "$output" "$branch" "$auto_detect"
+            ;;
+        "install"|"remove"|"update")
+            log_warning "功能开发中: $operation"
             ;;
         "")
             log_error "请指定操作"

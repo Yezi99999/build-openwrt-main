@@ -568,28 +568,6 @@ EOF
     esac
 }
 
-# 生成feeds配置文件
-generate_feeds_conf() {
-    local auto_fix="$1"
-    
-    if [ ! -f "feeds.conf.default" ] || [ "$auto_fix" = true ]; then
-        log_info "生成feeds.conf.default文件..."
-        
-        cat > "feeds.conf.default" << 'EOF'
-src-git packages https://github.com/coolsnowwolf/packages
-src-git luci https://github.com/coolsnowwolf/luci
-src-git routing https://github.com/coolsnowwolf/routing
-src-git telephony https://github.com/openwrt/telephony
-src-git kenzo https://github.com/kenzok8/openwrt-packages
-src-git small https://github.com/kenzok8/small
-EOF
-        
-        log_success "feeds.conf.default 生成完成"
-    else
-        log_debug "feeds.conf.default 已存在，跳过生成"
-    fi
-}
-
 # 应用自动修复
 apply_auto_fixes() {
     local device="$1"
@@ -603,7 +581,7 @@ apply_auto_fixes() {
     log_info "开始应用自动修复..."
     
     # 确保修复脚本存在且可执行
-    local main_fix_script="fixes/fix-build-issues.sh"
+    local main_fix_script="scrpit/fixes/fix-build-issues.sh"
     
     if [ ! -f "$main_fix_script" ]; then
         log_warning "主修复脚本不存在: $main_fix_script"
