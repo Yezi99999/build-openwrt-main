@@ -223,26 +223,6 @@ jobs:
             exit 1
           fi
       
-      - name: 🔑 生成缓存键
-        id: cache
-        run: |
-          echo "🔑 生成缓存键..."
-          
-          # 基于配置参数生成唯一缓存键
-          CACHE_KEY="${{ steps.parse.outputs.source_branch }}-${{ steps.parse.outputs.target_device }}"
-          
-          # 如果有插件，将插件hash包含在缓存键中
-          if [ -n "${{ steps.parse.outputs.plugins_list }}" ]; then
-            PLUGINS_HASH=$(echo "${{ steps.parse.outputs.plugins_list }}" | sha256sum | cut -d' ' -f1 | cut -c1-8)
-            CACHE_KEY="${CACHE_KEY}-plugins-${PLUGINS_HASH}"
-          fi
-          
-          # 添加日期确保定期更新
-          DATE_KEY=$(date +%Y%m%d)
-          CACHE_KEY="${CACHE_KEY}-${DATE_KEY}"
-          
-          echo "cache_key=$CACHE_KEY" >> $GITHUB_OUTPUT
-          echo "🔑 缓存键: $CACHE_KEY"
 
   # 构建准备作业
   build-preparation:
@@ -260,16 +240,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      
-      - name: 💿 缓存构建依赖
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/pip
-            /opt/hostedtoolcache
-          key: build-deps-${{ needs.config-analysis.outputs.cache_key }}
-          restore-keys: |
-            build-deps-
       
       - name: 📦 安装系统依赖
         run: |
