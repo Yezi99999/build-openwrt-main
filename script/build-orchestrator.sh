@@ -359,43 +359,74 @@ execute_build_process() {
     local device="$1"
     local plugins="$2"
     local source_branch="$3"
-    
+
     log_info "开始构建流程..."
-    
+
     # 步骤1: 初始化插件数据库
     if ! call_module "plugin_manager" "init"; then
         log_error "插件数据库初始化失败"
         return 1
     fi
-    
+
     # 步骤2: 构建前检查
     if ! pre_build_check "$device" "$plugins"; then
         log_error "构建前检查失败"
         return 1
     fi
-    
-    # 步骤3: 生成配置文件
-    local config_args=("$device" "$plugins")
-    if [ "$AUTO_FIX_ENABLED" = true ]; then
-        config_args+=("--auto-fix")
-    fi
-    
-    if ! call_module "config_generator" "${config_args[@]}"; then
-        log_error "配置文件生成失败"
+
+    # 步骤3: 生成 .config 文件
+    log_info "生成 .config 文件..."
+    local config_args=()
+    config_args+=("--runtime-config" "$RUNTIME_CONFIG_FILE")
+    config_args+=("$device")
+    config_args+=("$plugins")
+    [ "$AUTO_FIX_ENABLED" = true ] && config_args+=("--auto-fix")
+    [ "$VERBOSE_MODE" = true ] && config_args+=("--verbose")
+    chmod +x "$PROJECT_ROOT/script/generate-config.sh"
+    if ! "$PROJECT_ROOT/script/generate-config.sh" "${config_args[@]}"; then
+        log_error ".config 文件生成失败"
         return 1
     fi
-    
-    # 步骤4: 最终验证
-    if [ -f ".config" ]; then
-        log_success "构建配置已生成: .config"
-        
-        # 显示配置摘要
+
+    # 步骤4: 生成 feeds.conf.default 文件
+    log_info "生成 feeds.conf.default 文件..."
+    local feeds_args=()
+    feeds_args+=("--runtime-config" "$RUNTIME_CONFIG_FILE")
+    feeds_args+=("generate-feeds")
+    feeds_args+=("-l" "$plugins")
+    feeds_args+=("-b" "$source_branch")
+    feeds_args+=("-o" "feeds.conf.default")
+    [ "$VERBOSE_MODE" = true ] && feeds_args+=("-v")
+    chmod +x "$PROJECT_ROOT/script/plugin-manager.sh"
+    if ! "$PROJECT_ROOT/script/plugin-manager.sh" "${feeds_args[@]}"; then
+        log_error "feeds.conf.default 文件生成失败"
+        return 1
+    fi
+
+    # 步骤5: 执行自动修复（如有需要）
+    if [ "$AUTO_FIX_ENABLED" = true ]; then
+        log_info "执行编译错误自动修复..."
+        if [ -f "$PROJECT_ROOT/script/fixes/fix-build-issues.sh" ]; then
+            chmod +x "$PROJECT_ROOT/script/fixes/fix-build-issues.sh"
+            if ! "$PROJECT_ROOT/script/fixes/fix-build-issues.sh" "$device" "auto"; then
+                log_warning "自动修复脚本执行遇到问题，但继续流程"
+            else
+                log_success "自动修复完成"
+            fi
+        else
+            log_warning "未找到自动修复脚本: $PROJECT_ROOT/script/fixes/fix-build-issues.sh"
+        fi
+    fi
+
+    # 步骤6: 最终验证
+    if [ -f ".config" ] && [ -f "feeds.conf.default" ]; then
+        log_success "构建配置已生成: .config, feeds.conf.default"
         show_build_summary "$device" "$plugins" "$source_branch"
     else
-        log_error "配置文件未生成"
+        log_error "配置文件未全部生成"
         return 1
     fi
-    
+
     return 0
 }
 
