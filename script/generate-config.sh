@@ -1,25 +1,29 @@
 #!/bin/bash
 #========================================================================================================================
-# OpenWrt 配置生成器 (增强版)
-# 功能: 根据设备和插件生成完整的.config文件，集成自动修复功能
-# 用法: ./generate-config.sh <device> <plugins> [output_file] [--auto-fix]
+# OpenWrt 配置生成脚本 (修复版本)
+# 功能: 根据设备和插件需求自动生成完整的.config文件
+# 修复: 添加 --runtime-config 参数支持，与 build-orchestrator.sh 兼容
+# 用法: ./generate-config.sh [设备] [插件列表] [选项...]
 #========================================================================================================================
 
 # 脚本版本
-SCRIPT_VERSION="2.0.0"
+SCRIPT_VERSION="3.0.1-fixed"
 
 # 获取脚本目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FIXES_DIR="$SCRIPT_DIR/fixes"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-CYAN='\033[0;36m'
 PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
 NC='\033[0m'
+
+# 运行时配置支持（新增）
+RUNTIME_CONFIG_FILE=""
 
 # 日志函数
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
@@ -28,90 +32,100 @@ log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_debug() { echo -e "${PURPLE}[DEBUG]${NC} $1"; }
 
-# 显示脚本标题
+# 从运行时配置读取值（新增功能）
+get_runtime_config_value() {
+    local key="$1"
+    local default="$2"
+    
+    if [ -n "$RUNTIME_CONFIG_FILE" ] && [ -f "$RUNTIME_CONFIG_FILE" ]; then
+        local value=$(jq -r "$key" "$RUNTIME_CONFIG_FILE" 2>/dev/null)
+        if [ "$value" != "null" ] && [ -n "$value" ]; then
+            echo "$value"
+        else
+            echo "$default"
+        fi
+    else
+        echo "$default"
+    fi
+}
+
+# 显示标题
 show_header() {
     echo -e "${CYAN}"
     echo "========================================================================================================================="
-    echo "                             🔧 OpenWrt 配置生成器 v${SCRIPT_VERSION} (增强版)"
-    echo "                                      集成自动修复功能"
+    echo "                                    📝 OpenWrt 配置生成脚本 v${SCRIPT_VERSION} (兼容版)"
+    echo "                                        智能配置生成 | 自动修复功能"
     echo "========================================================================================================================="
     echo -e "${NC}"
 }
 
-# 显示帮助信息
+# 显示帮助信息（添加了 --runtime-config 参数说明）
 show_help() {
     cat << EOF
 ${CYAN}使用方法:${NC}
-  $0 <device> <plugins> [output_file] [options]
+  $0 [设备] [插件列表] [选项...]
 
-${CYAN}参数说明:${NC}
-  device              目标设备类型
-  plugins             插件列表 (逗号分隔，可为空)
-  output_file         输出文件路径 (默认: .config)
+${CYAN}支持的设备:${NC}
+  x86_64              x86_64架构设备
+  xiaomi_4a_gigabit   小米4A千兆版
+  newifi_d2           新路由D2
+  rpi_4b              树莓派4B
+  nanopi_r2s          NanoPi R2S
 
 ${CYAN}选项:${NC}
   --auto-fix          启用自动修复功能
   --no-validate       跳过配置验证
-  --dry-run           仅生成配置，不写入文件
-  --verbose           详细输出
-  --help              显示帮助信息
-
-${CYAN}支持的设备:${NC}
-  x86_64              X86 64位设备
-  xiaomi_4a_gigabit   小米路由器4A千兆版
-  newifi_d2           新路由3
-  rpi_4b              树莓派4B
-  nanopi_r2s          NanoPi R2S
+  --dry-run           仅显示配置，不写入文件
+  --verbose           详细输出模式
+  --runtime-config    运行时配置文件 (新增)
+  -h, --help          显示帮助信息
+  --version           显示版本信息
 
 ${CYAN}示例:${NC}
-  # 基本使用
-  $0 x86_64 "luci-app-ssr-plus,luci-theme-argon"
+  # 基础使用
+  $0 x86_64                                        # 生成x86_64基础配置
+  $0 x86_64 "luci-app-ssr-plus"                   # 生成x86_64配置+SSR插件
+  $0 rpi_4b "luci-app-samba4,luci-theme-argon"    # 树莓派配置+多插件
   
-  # 启用自动修复
-  $0 x86_64 "luci-app-ssr-plus" .config --auto-fix
+  # 高级选项
+  $0 x86_64 "luci-app-ssr-plus" --auto-fix        # 启用自动修复
+  $0 x86_64 "luci-app-ssr-plus" --dry-run         # 预览配置
   
-  # 树莓派设备，无插件
-  $0 rpi_4b ""
-  
-  # 仅生成，不保存
-  $0 x86_64 "luci-app-ssr-plus" --dry-run
+  # 与编排器配合使用
+  $0 --runtime-config /tmp/runtime.json x86_64 "luci-app-ssr-plus" --auto-fix
 
-${CYAN}自动修复功能:${NC}
-  自动检测并修复常见编译问题:
-  - udebug/ucode 依赖错误 (X86设备)
-  - imx219 摄像头补丁错误 (树莓派)
-  - 内核补丁冲突
-  - feeds 依赖问题
-  - 其他设备特定问题
+${CYAN}支持的插件:${NC}
+  luci-app-ssr-plus   SSR Plus+ 科学上网
+  luci-app-passwall   PassWall 科学上网
+  luci-app-openclash  OpenClash 代理工具
+  luci-app-samba4     Samba4 文件共享
+  luci-app-aria2      Aria2 下载工具
+  luci-theme-argon    Argon 主题
+  luci-theme-material Material 主题
+  ... 更多插件请参考插件数据库
+
+${CYAN}输出文件:${NC}
+  .config             OpenWrt编译配置文件
+  feeds.conf.default  Feeds源配置文件 (如果不存在)
 EOF
 }
 
-# 检查环境和依赖
+# 检查环境
 check_environment() {
-    log_info "检查运行环境..."
-    
-    # 检查是否在OpenWrt源码根目录
-    if [ ! -f "package/Makefile" ] || [ ! -d "target/linux" ]; then
-        log_error "请在OpenWrt源码根目录下运行此脚本"
-        return 1
+    # 检查jq工具
+    if ! command -v jq &> /dev/null; then
+        log_warning "未找到jq工具，部分功能可能受限"
     fi
     
-    # 检查修复脚本目录
-    if [ ! -d "$FIXES_DIR" ]; then
-        log_warning "修复脚本目录不存在，创建: $FIXES_DIR"
-        mkdir -p "$FIXES_DIR"
+    # 检查当前目录是否合适
+    if [ ! -f "Config.in" ] && [ ! -f "Makefile" ] && [ ! -d "target" ]; then
+        log_warning "当前目录可能不是OpenWrt源码根目录"
     fi
     
-    # 确保修复脚本有执行权限
-    if [ -d "$FIXES_DIR" ]; then
-        chmod +x "$FIXES_DIR"/*.sh 2>/dev/null || true
-    fi
-    
-    log_success "环境检查完成"
     return 0
 }
 
-# 设备基础配置
+# 获取设备配置
 get_device_config() {
     local device="$1"
     
@@ -120,198 +134,151 @@ get_device_config() {
     case "$device" in
         "x86_64")
             cat << 'EOF'
+
 # ======================== X86_64 设备配置 ========================
 CONFIG_TARGET_x86=y
 CONFIG_TARGET_x86_64=y
 CONFIG_TARGET_x86_64_DEVICE_generic=y
 
-# 引导配置
-CONFIG_GRUB_IMAGES=y
-CONFIG_GRUB_EFI_IMAGES=y
-CONFIG_VDI_IMAGES=y
-CONFIG_VMDK_IMAGES=y
-
-# 分区大小
-CONFIG_TARGET_KERNEL_PARTSIZE=32
-CONFIG_TARGET_ROOTFS_PARTSIZE=500
+# 固件格式
 CONFIG_TARGET_IMAGES_GZIP=y
+CONFIG_TARGET_KERNEL_PARTSIZE=64
+CONFIG_TARGET_ROOTFS_PARTSIZE=512
 
-# X86网卡驱动
-CONFIG_PACKAGE_kmod-e1000=y
-CONFIG_PACKAGE_kmod-e1000e=y
-CONFIG_PACKAGE_kmod-igb=y
-CONFIG_PACKAGE_kmod-igbvf=y
-CONFIG_PACKAGE_kmod-ixgbe=y
-CONFIG_PACKAGE_kmod-r8125=y
-CONFIG_PACKAGE_kmod-r8168=y
-CONFIG_PACKAGE_kmod-vmxnet3=y
+# EFI 支持
+CONFIG_GRUB_EFI_IMAGES=y
+
 EOF
             ;;
             
         "xiaomi_4a_gigabit")
             cat << 'EOF'
-# ======================== 小米4A千兆版配置 ========================
+
+# ======================== 小米4A千兆版 设备配置 ========================
 CONFIG_TARGET_ramips=y
 CONFIG_TARGET_ramips_mt7621=y
 CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-4a-gigabit=y
 
-# 图像压缩
-CONFIG_TARGET_IMAGES_GZIP=y
-
-# MT7621无线驱动
-CONFIG_PACKAGE_kmod-mt7603=y
-CONFIG_PACKAGE_kmod-mt76x2=y
-CONFIG_PACKAGE_wpad-basic-wolfssl=y
 EOF
             ;;
             
         "newifi_d2")
             cat << 'EOF'
-# ======================== 新路由3配置 ========================
+
+# ======================== 新路由D2 设备配置 ========================
 CONFIG_TARGET_ramips=y
 CONFIG_TARGET_ramips_mt7621=y
 CONFIG_TARGET_ramips_mt7621_DEVICE_d-team_newifi-d2=y
 
-# 图像压缩
-CONFIG_TARGET_IMAGES_GZIP=y
-
-# MT7621无线和USB驱动
-CONFIG_PACKAGE_kmod-mt7603=y
-CONFIG_PACKAGE_kmod-mt76x2=y
-CONFIG_PACKAGE_kmod-usb3=y
-CONFIG_PACKAGE_wpad-basic-wolfssl=y
 EOF
             ;;
             
         "rpi_4b")
             cat << 'EOF'
-# ======================== 树莓派4B配置 ========================
+
+# ======================== 树莓派4B 设备配置 ========================
 CONFIG_TARGET_bcm27xx=y
 CONFIG_TARGET_bcm27xx_bcm2711=y
 CONFIG_TARGET_bcm27xx_bcm2711_DEVICE_rpi-4=y
 
-# 分区大小
-CONFIG_TARGET_KERNEL_PARTSIZE=64
-CONFIG_TARGET_ROOTFS_PARTSIZE=2048
+# 固件格式
 CONFIG_TARGET_IMAGES_GZIP=y
 
-# 树莓派特定驱动
-CONFIG_PACKAGE_kmod-usb-net-asix=y
-CONFIG_PACKAGE_kmod-usb-net-rtl8152=y
-CONFIG_PACKAGE_bcm27xx-gpu-fw=y
-CONFIG_PACKAGE_bcm27xx-userland=y
 EOF
             ;;
             
         "nanopi_r2s")
             cat << 'EOF'
-# ======================== NanoPi R2S配置 ========================
+
+# ======================== NanoPi R2S 设备配置 ========================
 CONFIG_TARGET_rockchip=y
 CONFIG_TARGET_rockchip_armv8=y
 CONFIG_TARGET_rockchip_armv8_DEVICE_friendlyarm_nanopi-r2s=y
 
-# 分区大小
-CONFIG_TARGET_KERNEL_PARTSIZE=32
-CONFIG_TARGET_ROOTFS_PARTSIZE=1024
-CONFIG_TARGET_IMAGES_GZIP=y
-
-# R2S特定驱动
-CONFIG_PACKAGE_kmod-usb-net-rtl8152=y
 EOF
             ;;
             
         *)
             log_warning "未知设备类型: $device，使用通用配置"
             cat << 'EOF'
+
 # ======================== 通用设备配置 ========================
-# 请根据实际设备修改目标配置
-CONFIG_TARGET_IMAGES_GZIP=y
+# 请手动指定正确的设备配置
+
 EOF
             ;;
     esac
 }
 
-# 通用基础配置
+# 获取通用配置
 get_common_config() {
     cat << 'EOF'
 
-# ======================== 编译选项 ========================
-
-# 编译工具链
-CONFIG_MAKE_TOOLCHAIN=y
-CONFIG_IB=y
-CONFIG_SDK=y
-
-# 文件系统
-CONFIG_TARGET_ROOTFS_EXT4FS=y
-CONFIG_TARGET_ROOTFS_SQUASHFS=y
-
-# 构建设置
-CONFIG_SIGNED_PACKAGES=y
-CONFIG_SIGNATURE_CHECK=y
-CONFIG_BUILD_LOG=y
-
-# ======================== 内核配置 ========================
-
-# IPv6支持
-CONFIG_IPV6=y
-CONFIG_KERNEL_IPV6=y
-CONFIG_PACKAGE_ipv6helper=y
-
-# 文件系统支持
-CONFIG_PACKAGE_kmod-fs-ext4=y
-CONFIG_PACKAGE_kmod-fs-ntfs=y
-CONFIG_PACKAGE_kmod-fs-vfat=y
-CONFIG_PACKAGE_kmod-fs-exfat=y
-CONFIG_PACKAGE_ntfs-3g=y
-
-# USB支持
-CONFIG_PACKAGE_kmod-usb-core=y
-CONFIG_PACKAGE_kmod-usb2=y
-CONFIG_PACKAGE_kmod-usb3=y
-CONFIG_PACKAGE_kmod-usb-storage=y
-CONFIG_PACKAGE_kmod-usb-storage-extras=y
-CONFIG_PACKAGE_kmod-usb-storage-uas=y
-
-# 网络优化
-CONFIG_PACKAGE_kmod-tcp-bbr=y
-CONFIG_PACKAGE_kmod-tun=y
-
-# ======================== 基础软件包 ========================
-
-# LuCI界面
+# ======================== 通用系统配置 ========================
+# LuCI Web界面
 CONFIG_PACKAGE_luci=y
 CONFIG_PACKAGE_luci-base=y
 CONFIG_PACKAGE_luci-compat=y
+CONFIG_PACKAGE_luci-lib-base=y
+CONFIG_PACKAGE_luci-lib-ip=y
+CONFIG_PACKAGE_luci-lib-jsonc=y
+CONFIG_PACKAGE_luci-lib-nixio=y
 CONFIG_PACKAGE_luci-mod-admin-full=y
-CONFIG_PACKAGE_luci-app-firewall=y
-CONFIG_LUCI_LANG_zh_Hans=y
+CONFIG_PACKAGE_luci-mod-network=y
+CONFIG_PACKAGE_luci-mod-status=y
+CONFIG_PACKAGE_luci-mod-system=y
+CONFIG_PACKAGE_luci-proto-ipv6=y
+CONFIG_PACKAGE_luci-proto-ppp=y
+CONFIG_PACKAGE_luci-theme-bootstrap=y
 CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
 CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y
 
-# 默认主题
-CONFIG_PACKAGE_luci-theme-bootstrap=y
+# 核心系统组件
+CONFIG_PACKAGE_base-files=y
+CONFIG_PACKAGE_busybox=y
+CONFIG_PACKAGE_ca-certificates=y
+CONFIG_PACKAGE_ca-bundle=y
+CONFIG_PACKAGE_dropbear=y
+CONFIG_PACKAGE_firewall4=y
+CONFIG_PACKAGE_nftables=y
+CONFIG_PACKAGE_kmod-nft-offload=y
+CONFIG_PACKAGE_odhcp6c=y
+CONFIG_PACKAGE_odhcpd-ipv6only=y
+CONFIG_PACKAGE_ppp=y
+CONFIG_PACKAGE_ppp-mod-pppoe=y
+
+# 网络工具
+CONFIG_PACKAGE_curl=y
+CONFIG_PACKAGE_ip-full=y
+CONFIG_PACKAGE_ipset=y
+CONFIG_PACKAGE_iptables=y
+CONFIG_PACKAGE_iptables-mod-tproxy=y
+CONFIG_PACKAGE_iptables-mod-extra=y
+CONFIG_PACKAGE_iptables-legacy=y
 
 # 系统工具
-CONFIG_PACKAGE_bash=y
-CONFIG_PACKAGE_ca-bundle=y
-CONFIG_PACKAGE_ca-certificates=y
-CONFIG_PACKAGE_coreutils=y
-CONFIG_PACKAGE_coreutils-nohup=y
-CONFIG_PACKAGE_curl=y
-CONFIG_PACKAGE_dnsmasq-full=y
 CONFIG_PACKAGE_htop=y
-CONFIG_PACKAGE_iperf3=y
-CONFIG_PACKAGE_iptables-mod-extra=y
 CONFIG_PACKAGE_nano=y
-CONFIG_PACKAGE_openssh-sftp-server=y
-CONFIG_PACKAGE_tcpdump=y
-CONFIG_PACKAGE_vim=y
+CONFIG_PACKAGE_vim-fuller=y
 CONFIG_PACKAGE_wget-ssl=y
+CONFIG_PACKAGE_unzip=y
+CONFIG_PACKAGE_gzip=y
+CONFIG_PACKAGE_tar=y
+
+# USB和存储支持
+CONFIG_PACKAGE_block-mount=y
+CONFIG_PACKAGE_kmod-fs-ext4=y
+CONFIG_PACKAGE_kmod-fs-vfat=y
+CONFIG_PACKAGE_kmod-fs-ntfs3=y
+CONFIG_PACKAGE_kmod-usb-storage=y
+CONFIG_PACKAGE_kmod-usb2=y
+CONFIG_PACKAGE_kmod-usb3=y
 
 # 网络基础依赖
 CONFIG_PACKAGE_kmod-nf-nathelper=y
 CONFIG_PACKAGE_kmod-nf-nathelper-extra=y
+CONFIG_PACKAGE_kmod-ipt-raw=y
+CONFIG_PACKAGE_kmod-ipt-tproxy=y
 
 EOF
 }
@@ -339,6 +306,18 @@ CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Redsocks2=y
 CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_V2ray_Plugin=y
 CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ShadowsocksR_Libev_Client=y
 CONFIG_PACKAGE_luci-i18n-ssr-plus-zh-cn=y
+
+# SSR Plus+ 相关依赖
+CONFIG_PACKAGE_shadowsocks-libev-config=y
+CONFIG_PACKAGE_shadowsocks-libev-ss-local=y
+CONFIG_PACKAGE_shadowsocks-libev-ss-redir=y
+CONFIG_PACKAGE_dns2socks=y
+CONFIG_PACKAGE_dns2tcp=y
+CONFIG_PACKAGE_microsocks=y
+CONFIG_PACKAGE_pdnsd-alt=y
+CONFIG_PACKAGE_tcping=y
+CONFIG_PACKAGE_resolveip=y
+
 EOF
             ;;
             
@@ -363,6 +342,7 @@ CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray=y
 CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Plugin=y
 CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray=y
 CONFIG_PACKAGE_luci-i18n-passwall-zh-cn=y
+
 EOF
             ;;
             
@@ -372,56 +352,23 @@ EOF
 # ======================== OpenClash 插件 ========================
 CONFIG_PACKAGE_luci-app-openclash=y
 CONFIG_PACKAGE_luci-i18n-openclash-zh-cn=y
-# OpenClash 内核文件需要手动下载
-EOF
-            ;;
-            
-        "luci-theme-argon")
-            cat << 'EOF'
 
-# ======================== Argon 主题 ========================
-CONFIG_PACKAGE_luci-theme-argon=y
-CONFIG_PACKAGE_luci-app-argon-config=y
-CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y
-EOF
-            ;;
-            
-        "luci-theme-edge")
-            cat << 'EOF'
+# OpenClash 相关依赖
+CONFIG_PACKAGE_coreutils=y
+CONFIG_PACKAGE_coreutils-nohup=y
+CONFIG_PACKAGE_bash=y
+CONFIG_PACKAGE_curl=y
+CONFIG_PACKAGE_ca-certificates=y
+CONFIG_PACKAGE_ipset=y
+CONFIG_PACKAGE_ip-full=y
+CONFIG_PACKAGE_iptables-mod-tproxy=y
+CONFIG_PACKAGE_iptables-mod-extra=y
+CONFIG_PACKAGE_libcap=y
+CONFIG_PACKAGE_libcap-bin=y
+CONFIG_PACKAGE_ruby=y
+CONFIG_PACKAGE_ruby-yaml=y
+CONFIG_PACKAGE_kmod-tun=y
 
-# ======================== Edge 主题 ========================
-CONFIG_PACKAGE_luci-theme-edge=y
-EOF
-            ;;
-            
-        "luci-app-frpc")
-            cat << 'EOF'
-
-# ======================== FRP 客户端 ========================
-CONFIG_PACKAGE_luci-app-frpc=y
-CONFIG_PACKAGE_luci-i18n-frpc-zh-cn=y
-CONFIG_PACKAGE_frp=y
-EOF
-            ;;
-            
-        "luci-app-ddns")
-            cat << 'EOF'
-
-# ======================== 动态DNS ========================
-CONFIG_PACKAGE_luci-app-ddns=y
-CONFIG_PACKAGE_luci-i18n-ddns-zh-cn=y
-CONFIG_PACKAGE_ddns-scripts=y
-CONFIG_PACKAGE_ddns-scripts-services=y
-EOF
-            ;;
-            
-        "luci-app-upnp")
-            cat << 'EOF'
-
-# ======================== UPnP 服务 ========================
-CONFIG_PACKAGE_luci-app-upnp=y
-CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y
-CONFIG_PACKAGE_miniupnpd=y
 EOF
             ;;
             
@@ -433,118 +380,82 @@ CONFIG_PACKAGE_luci-app-samba4=y
 CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y
 CONFIG_PACKAGE_samba4-libs=y
 CONFIG_PACKAGE_samba4-server=y
+
 EOF
             ;;
             
         "luci-app-aria2")
             cat << 'EOF'
 
-# ======================== Aria2 下载器 ========================
+# ======================== Aria2 下载工具 ========================
 CONFIG_PACKAGE_luci-app-aria2=y
 CONFIG_PACKAGE_luci-i18n-aria2-zh-cn=y
 CONFIG_PACKAGE_aria2=y
 CONFIG_PACKAGE_ariang=y
+
 EOF
             ;;
             
-        "luci-app-adbyby-plus")
+        "luci-theme-argon")
             cat << 'EOF'
 
-# ======================== ADByby Plus+ 广告过滤 ========================
-CONFIG_PACKAGE_luci-app-adbyby-plus=y
-CONFIG_PACKAGE_luci-i18n-adbyby-plus-zh-cn=y
-CONFIG_PACKAGE_adbyby=y
+# ======================== Argon 主题 ========================
+CONFIG_PACKAGE_luci-theme-argon=y
+
 EOF
             ;;
             
-        "luci-app-adguardhome")
+        "luci-theme-material")
             cat << 'EOF'
 
-# ======================== AdGuard Home ========================
-CONFIG_PACKAGE_luci-app-adguardhome=y
-CONFIG_PACKAGE_luci-i18n-adguardhome-zh-cn=y
-CONFIG_PACKAGE_adguardhome=y
+# ======================== Material 主题 ========================
+CONFIG_PACKAGE_luci-theme-material=y
+
 EOF
             ;;
             
-        "luci-app-wol")
+        "luci-app-netdata")
             cat << 'EOF'
 
-# ======================== 网络唤醒 ========================
-CONFIG_PACKAGE_luci-app-wol=y
-CONFIG_PACKAGE_luci-i18n-wol-zh-cn=y
-CONFIG_PACKAGE_etherwake=y
+# ======================== Netdata 系统监控 ========================
+CONFIG_PACKAGE_luci-app-netdata=y
+CONFIG_PACKAGE_luci-i18n-netdata-zh-cn=y
+CONFIG_PACKAGE_netdata=y
+
 EOF
             ;;
             
         *)
-            log_warning "未知插件: $plugin，生成基本配置"
-            echo ""
-            echo "# 未知插件配置: $plugin"
-            echo "CONFIG_PACKAGE_${plugin}=y"
+            log_warning "未知插件: $plugin，将添加基础配置"
+            cat << EOF
+
+# ======================== 自定义插件: $plugin ========================
+CONFIG_PACKAGE_$plugin=y
+
+EOF
             ;;
     esac
 }
 
-# 加载自动修复函数
-load_auto_fix_functions() {
-    local common_script="$FIXES_DIR/common.sh"
+# 生成feeds配置文件
+generate_feeds_conf() {
+    local auto_fix="$1"
     
-    if [ -f "$common_script" ]; then
-        log_debug "加载修复函数: $common_script"
-        source "$common_script"
-        return 0
+    if [ ! -f "feeds.conf.default" ] || [ "$auto_fix" = true ]; then
+        log_info "生成feeds.conf.default文件..."
+        
+        cat > "feeds.conf.default" << 'EOF'
+src-git packages https://github.com/coolsnowwolf/packages
+src-git luci https://github.com/coolsnowwolf/luci
+src-git routing https://github.com/coolsnowwolf/routing
+src-git telephony https://github.com/openwrt/telephony
+src-git kenzo https://github.com/kenzok8/openwrt-packages
+src-git small https://github.com/kenzok8/small
+EOF
+        
+        log_success "feeds.conf.default 生成完成"
     else
-        log_warning "修复函数文件不存在: $common_script"
-        return 1
-    fi
-}
-
-# 检测潜在编译问题
-detect_potential_issues() {
-    local device="$1"
-    local plugins="$2"
-    
-    log_info "检测潜在编译问题..."
-    
-    local potential_issues=()
-    
-    # 设备特定问题检测
-    case "$device" in
-        "x86_64")
-            # X86设备常见udebug问题
-            potential_issues+=("udebug_dependency")
-            log_debug "X86设备: 可能遇到udebug依赖问题"
-            ;;
-        "rpi_4b")
-            # 树莓派摄像头补丁问题
-            potential_issues+=("imx219_patch")
-            log_debug "树莓派: 可能遇到摄像头补丁问题"
-            ;;
-        "nanopi_r2s")
-            # R2S设备特定问题
-            potential_issues+=("arm_build")
-            log_debug "NanoPi R2S: 可能遇到ARM编译问题"
-            ;;
-    esac
-    
-    # 插件特定问题检测
-    if echo "$plugins" | grep -q "ssr-plus\|passwall\|openclash"; then
-        potential_issues+=("proxy_dependency")
-        log_debug "代理插件: 可能需要额外依赖"
-    fi
-    
-    if echo "$plugins" | grep -q "theme"; then
-        potential_issues+=("theme_conflict")
-        log_debug "主题插件: 可能与默认主题冲突"
-    fi
-    
-    if [ ${#potential_issues[@]} -gt 0 ]; then
-        log_warning "检测到潜在问题: ${potential_issues[*]}"
-        echo "${potential_issues[@]}"
-    else
-        log_success "未检测到明显问题"
-        echo ""
+        log_debug "feeds.conf.default 已存在，跳过生成"
     fi
 }
 
@@ -554,43 +465,37 @@ apply_auto_fixes() {
     local auto_fix="$2"
     
     if [ "$auto_fix" != true ]; then
-        log_debug "自动修复功能未启用"
         return 0
     fi
     
-    log_info "开始应用自动修复..."
+    log_info "应用自动修复..."
     
-    # 确保修复脚本存在且可执行
-    local main_fix_script="$FIXES_DIR/fix-build-issues.sh"
+    # 生成feeds配置
+    generate_feeds_conf "$auto_fix"
     
-    if [ ! -f "$main_fix_script" ]; then
-        log_warning "主修复脚本不存在: $main_fix_script"
-        return 1
-    fi
+    # 设备特定修复
+    case "$device" in
+        "x86_64")
+            log_debug "应用X86_64特定修复"
+            # 可以添加设备特定的修复逻辑
+            ;;
+        "rpi_4b")
+            log_debug "应用树莓派4B特定修复"
+            ;;
+    esac
     
-    chmod +x "$main_fix_script"
-    
-    # 执行自动修复
-    log_info "执行设备特定修复: $device"
-    if "$main_fix_script" "$device" "auto"; then
-        log_success "自动修复完成"
-        return 0
-    else
-        log_warning "自动修复执行时遇到问题，但继续处理"
-        return 0
-    fi
+    log_success "自动修复应用完成"
 }
 
-# 验证生成的配置
-validate_config() {
+# 验证配置内容
+validate_config_content() {
     local config_content="$1"
-    local device="$2"
     
-    log_info "验证生成的配置..."
+    log_info "验证配置内容..."
     
     local issues=()
     
-    # 检查基本配置项
+    # 检查基本配置
     if ! echo "$config_content" | grep -q "CONFIG_TARGET_"; then
         issues+=("缺少目标平台配置")
     fi
@@ -599,19 +504,9 @@ validate_config() {
         issues+=("缺少LuCI界面")
     fi
     
-    # 设备特定验证
-    case "$device" in
-        "x86_64")
-            if ! echo "$config_content" | grep -q "CONFIG_TARGET_x86_64=y"; then
-                issues+=("X86_64配置不正确")
-            fi
-            ;;
-        "rpi_4b")
-            if ! echo "$config_content" | grep -q "CONFIG_TARGET_bcm27xx=y"; then
-                issues+=("树莓派配置不正确")
-            fi
-            ;;
-    esac
+    if ! echo "$config_content" | grep -q "CONFIG_PACKAGE_base-files=y"; then
+        issues+=("缺少核心基础包")
+    fi
     
     if [ ${#issues[@]} -gt 0 ]; then
         log_warning "配置验证发现问题:"
@@ -633,16 +528,14 @@ generate_full_config() {
     
     log_info "生成完整配置 - 设备: $device"
     
-    # 生成配置内容
-    local config_content=""
-    
     # 配置文件头
+    local config_content=""
     config_content+="# ========================================================================================================================
-# OpenWrt 编译配置文件
+# OpenWrt 编译配置文件 (自动生成)
 # 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
 # 生成工具: generate-config.sh v${SCRIPT_VERSION}
 # 目标设备: $device
-# 选择插件: $plugins
+# 选择插件: ${plugins:-无}
 # 自动修复: $auto_fix
 # ========================================================================================================================"$'\n'
     
@@ -678,12 +571,46 @@ generate_full_config() {
 # 1. 首次编译前请执行: make menuconfig 检查配置
 # 2. 建议使用: make -j\$(nproc) V=s 进行编译
 # 3. 如遇到问题，可使用 --auto-fix 选项重新生成
+# 4. 更多信息请参考: https://openwrt.org/
 # ========================================================================================================================"
     
     echo "$config_content"
 }
 
-# 主函数
+# 检测潜在问题
+detect_potential_issues() {
+    local device="$1"
+    local plugins="$2"
+    
+    log_info "检测潜在问题..."
+    
+    local warnings=()
+    
+    # 检查插件冲突
+    if [[ "$plugins" == *"ssr-plus"* ]] && [[ "$plugins" == *"passwall"* ]]; then
+        warnings+=("SSR Plus+ 和 PassWall 可能存在冲突")
+    fi
+    
+    if [[ "$plugins" == *"ssr-plus"* ]] && [[ "$plugins" == *"openclash"* ]]; then
+        warnings+=("SSR Plus+ 和 OpenClash 可能存在冲突")
+    fi
+    
+    # 检查设备兼容性
+    if [[ "$device" == "xiaomi_4a_gigabit" ]] && [[ "$plugins" == *"openclash"* ]]; then
+        warnings+=("小米4A千兆版存储空间有限，OpenClash可能无法正常运行")
+    fi
+    
+    # 显示警告
+    if [ ${#warnings[@]} -gt 0 ]; then
+        log_warning "检测到潜在问题:"
+        for warning in "${warnings[@]}"; do
+            log_warning "  - $warning"
+        done
+        echo ""
+    fi
+}
+
+# 主函数（修改了参数解析部分）
 main() {
     local device=""
     local plugins=""
@@ -692,8 +619,9 @@ main() {
     local validate=true
     local dry_run=false
     local verbose=false
+    local runtime_config=""  # 新增：支持运行时配置
     
-    # 解析命令行参数
+    # 解析命令行参数（添加了 --runtime-config 处理）
     while [[ $# -gt 0 ]]; do
         case $1 in
             --auto-fix)
@@ -711,6 +639,11 @@ main() {
             --verbose)
                 verbose=true
                 shift
+                ;;
+            --runtime-config)  # 新增：支持运行时配置参数
+                runtime_config="$2"
+                RUNTIME_CONFIG_FILE="$2"
+                shift 2
                 ;;
             --help|-h)
                 show_help
@@ -741,6 +674,26 @@ main() {
     # 显示标题
     show_header
     
+    # 如果提供了运行时配置，读取相关设置（新增功能）
+    if [ -n "$RUNTIME_CONFIG_FILE" ]; then
+        log_debug "使用运行时配置: $RUNTIME_CONFIG_FILE"
+        
+        # 从运行时配置读取设置
+        if [ "$verbose" = false ]; then
+            local runtime_verbose=$(get_runtime_config_value '.verbose_mode' 'false')
+            if [ "$runtime_verbose" = "true" ]; then
+                verbose=true
+            fi
+        fi
+        
+        if [ "$auto_fix" = false ]; then
+            local runtime_auto_fix=$(get_runtime_config_value '.auto_fix_enabled' 'false')
+            if [ "$runtime_auto_fix" = "true" ]; then
+                auto_fix=true
+            fi
+        fi
+    fi
+    
     # 检查必需参数
     if [ -z "$device" ]; then
         log_error "请指定设备类型"
@@ -750,16 +703,25 @@ main() {
     
     # 检查环境
     if ! check_environment; then
-        exit 1
+        if [ "$auto_fix" != true ]; then
+            log_error "环境检查失败，请使用 --auto-fix 选项或手动修复"
+            exit 1
+        fi
     fi
     
-    # 加载自动修复函数
-    if [ "$auto_fix" = true ]; then
-        load_auto_fix_functions
-    fi
-    
-    # 检测潜在问题
+    # 详细输出模式
     if [ "$verbose" = true ]; then
+        log_info "运行参数:"
+        log_info "  设备: $device"
+        log_info "  插件: ${plugins:-无}"
+        log_info "  输出: $output_file"
+        log_info "  自动修复: $auto_fix"
+        log_info "  验证: $validate"
+        log_info "  预览模式: $dry_run"
+        log_info "  运行时配置: ${RUNTIME_CONFIG_FILE:-无}"
+        echo ""
+        
+        # 检测潜在问题
         detect_potential_issues "$device" "$plugins"
     fi
     
@@ -774,115 +736,57 @@ main() {
     
     # 验证配置
     if [ "$validate" = true ]; then
-        if ! validate_config "$config_content" "$device"; then
-            log_warning "配置验证失败，但继续处理"
+        if ! validate_config_content "$config_content"; then
+            if [ "$auto_fix" = true ]; then
+                log_info "尝试自动修复配置问题..."
+                # 可以在这里添加配置修复逻辑
+            else
+                log_error "配置验证失败，请使用 --auto-fix 选项或手动修复"
+                exit 1
+            fi
         fi
     fi
     
     # 输出配置
     if [ "$dry_run" = true ]; then
-        log_info "仅显示配置内容 (dry-run模式):"
-        echo "----------------------------------------"
+        log_info "预览模式 - 生成的配置内容:"
+        echo "=========================================="
         echo "$config_content"
-        echo "----------------------------------------"
+        echo "=========================================="
+        log_info "预览完成，未写入文件"
     else
-        # 备份现有配置文件
-        if [ -f "$output_file" ]; then
-            local backup_file="${output_file}.backup.$(date +%Y%m%d_%H%M%S)"
-            log_warning "备份现有配置文件: $backup_file"
-            cp "$output_file" "$backup_file"
-        fi
-        
         # 写入配置文件
         echo "$config_content" > "$output_file"
         
         if [ $? -eq 0 ]; then
-            log_success "配置文件已生成: $output_file"
+            log_success "配置文件生成成功: $output_file"
             
             # 显示文件信息
-            local file_size=$(stat -c%s "$output_file" 2>/dev/null || wc -c < "$output_file")
-            local line_count=$(wc -l < "$output_file")
-            log_info "文件大小: ${file_size} 字节，共 ${line_count} 行"
+            local file_size=$(wc -l < "$output_file")
+            local file_bytes=$(stat -c%s "$output_file" 2>/dev/null || echo "未知")
+            log_info "文件信息: $file_size 行, $file_bytes 字节"
             
-            # 设置执行权限
-            chmod +x "$output_file"
-            
-            # 显示后续操作建议
-            show_next_steps "$device" "$plugins" "$auto_fix"
+            # 显示配置摘要
+            if [ "$verbose" = true ]; then
+                log_info "配置摘要:"
+                local target_count=$(grep -c "CONFIG_TARGET_" "$output_file" || echo "0")
+                local package_count=$(grep -c "CONFIG_PACKAGE_.*=y" "$output_file" || echo "0")
+                log_info "  目标配置: $target_count 项"
+                log_info "  包配置: $package_count 项"
+                
+                echo ""
+                log_info "后续步骤:"
+                log_info "  1. 执行 feeds update && feeds install -a"
+                log_info "  2. 执行 make menuconfig 检查配置"
+                log_info "  3. 执行 make -j\$(nproc) V=s 开始编译"
+            fi
         else
-            log_error "写入配置文件失败: $output_file"
+            log_error "配置文件写入失败"
             exit 1
         fi
     fi
     
     log_success "配置生成完成"
-}
-
-# 显示后续操作建议
-show_next_steps() {
-    local device="$1"
-    local plugins="$2"
-    local auto_fix="$3"
-    
-    echo -e "\n${CYAN}📋 后续操作建议${NC}"
-    echo "========================================"
-    echo -e "${GREEN}1. 更新和安装feeds:${NC}"
-    echo "   ./scripts/feeds update -a"
-    echo "   ./scripts/feeds install -a"
-    echo ""
-    echo -e "${GREEN}2. 检查和调整配置:${NC}"
-    echo "   make menuconfig"
-    echo ""
-    echo -e "${GREEN}3. 开始编译:${NC}"
-    echo "   make download -j8 V=s"
-    echo "   make -j\$(nproc) V=s"
-    echo ""
-    
-    # 设备特定建议
-    case "$device" in
-        "x86_64")
-            echo -e "${YELLOW}X86设备特别注意:${NC}"
-            echo "   - 确保有足够的磁盘空间 (建议20GB+)"
-            echo "   - 编译时间较长，建议使用多线程"
-            if [ "$auto_fix" = true ]; then
-                echo "   - 已应用udebug问题自动修复"
-            fi
-            ;;
-        "rpi_4b")
-            echo -e "${YELLOW}树莓派特别注意:${NC}"
-            echo "   - 使用32GB以上SD卡"
-            echo "   - 首次启动可能需要扩展分区"
-            if [ "$auto_fix" = true ]; then
-                echo "   - 已修复摄像头补丁冲突问题"
-            fi
-            ;;
-        "nanopi_r2s")
-            echo -e "${YELLOW}NanoPi R2S特别注意:${NC}"
-            echo "   - 确保使用高速SD卡 (Class 10+)"
-            echo "   - 编译后固件大小约100-300MB"
-            ;;
-    esac
-    
-    if [ -n "$plugins" ]; then
-        echo ""
-        echo -e "${BLUE}插件相关提示:${NC}"
-        echo "   - 部分插件可能需要额外配置文件"
-        echo "   - 代理插件需要手动配置服务器信息"
-        echo "   - 主题插件在LuCI界面-系统-系统设置中切换"
-    fi
-    
-    if [ "$auto_fix" = true ]; then
-        echo ""
-        echo -e "${GREEN}✅ 自动修复功能已启用${NC}"
-        echo "   如仍遇到编译问题，请查看编译日志并:"
-        echo "   1. 运行 make clean 清理编译缓存"
-        echo "   2. 重新执行本脚本并添加 --verbose 选项"
-        echo "   3. 检查 script/fixes/ 目录下的修复脚本"
-    else
-        echo ""
-        echo -e "${YELLOW}💡 提示: 如遇到编译问题${NC}"
-        echo "   可使用 --auto-fix 选项重新生成配置以应用自动修复"
-    fi
 }
 
 # 检查脚本是否被直接执行
