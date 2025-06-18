@@ -101,8 +101,6 @@ jobs:
       config_valid: ${{ steps.validate.outputs.config_valid }}
       device_supported: ${{ steps.validate.outputs.device_supported }}
       
-      # 缓存配置
-      cache_key: ${{ steps.cache.outputs.cache_key }}
       
     steps:
       - name: 🚀 检出代码仓库
@@ -502,7 +500,7 @@ jobs:
           cat feeds.conf.default
 
           echo "📋 编译配置预览:"
-          head -30 openwrt/.config
+          head -30 .config
           
           echo "🔄 更新 feeds..."
           ./scripts/feeds update -a
